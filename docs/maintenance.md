@@ -4,7 +4,7 @@ For whoever keeps the agent working after it ships: adding skills and tools for 
 green, and finding out why a run went wrong. The helper is the GPT CLI, which cannot see the project, so
 every task starts by pasting it a **context pack** that `scripts/gpt_pack.py` builds for you.
 
-Setup and the three backends are in `README.md`; the design is in `agents.md`.
+Setup and settings are in `docs/setup.md`; the design is in `docs/design.md`.
 
 ## What you change, and what stays fixed
 
@@ -14,7 +14,7 @@ Setup and the three backends are in `README.md`; the design is in `agents.md`.
 | Toolkits: `plugins/tools/*.py` and their tests | Prompts: `agent/prompts/*.md` |
 | Planner worked examples: `plugins/examples/planner.md` | The UI and CLI: `app.py`, `cli.py` |
 | Data dictionary: `sandbox/references/datalake_dictionary.md` | Packages: `requirements.txt` (production is closed) |
-| Golden tasks: `tests/golden/*.json` | The docs: `agents.md`, `CLAUDE.md`, `README.md` |
+| Golden tasks: `tests/golden/*.json` | The docs: `docs/`, `CLAUDE.md`, `README.md` |
 
 The fixed part enforces the rules that keep answers trustworthy (arithmetic in tools, every number traced to a
 source, approvals for anything that writes, read-only data lake). A skill or tool can never switch them off.
@@ -109,7 +109,7 @@ Useful files in `runs/<run id>/`: `log.jsonl` (every model and tool call, with p
    `{{placeholder}}`). Users can also adjust wording in the UI's prompt settings, saved in `settings/`.
 3. Run the unit tests and the full eval again; compare the two reports. Keep the change only if the score holds
    and no task got worse for a reason you can explain.
-4. Update `agents.md` when the change alters behaviour it describes.
+4. Update `docs/design.md` when the change alters behaviour it describes.
 
 ## Production configuration
 
@@ -123,6 +123,8 @@ Useful files in `runs/<run id>/`: `log.jsonl` (every model and tool call, with p
 | `AGENT_PLUGINS`, `AGENT_SKILLS`, `AGENT_EXAMPLES` | default `plugins/...` | Point to another folder of skills, tools or examples |
 | `BASIC_TOOLKITS` | e.g. `files,analysis,datalake,docs` | Toolkits on when a session starts |
 | `AGENT_MAX_STEPS` | `15` | Executor steps per run before it stops |
+| `SQL_TIMEOUT_S` | `900` | Longest a lake query may run (15 minutes); set the lake driver's timeout to match |
+| `TOOL_TIMEOUT_S` | `30` | Time limit for every other tool call |
 
 Check that `python smoke_model.py --backend prod` passes after any change to the wrapper or the model.
 

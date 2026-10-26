@@ -1,4 +1,4 @@
-"""Model adapter (agents.md §4).
+"""Model adapter (docs/design.md §4).
 
 The rest of the code calls only `ChatModel.complete(messages, effort, stop, purpose)`.
 Any backend module that exposes `call(text: str, effort: str) -> str` can be wrapped

@@ -118,7 +118,8 @@ def _sql_problem(args) -> str | None:
 @tool("sql_query", "Run one read-only SQL SELECT on the data lake; filter and aggregate in SQL. The full result "
       f"(at most {config.MAX_SQL_ROWS} rows) is saved as a work table (path in the reply) for run_python, "
       "read_file or save_table. A repeated identical query reuses its saved table. Each query needs the user's "
-      "approval (it reads the lake).", SqlArgs, risky=_queries_lake, check=_sql_problem)
+      "approval (it reads the lake).", SqlArgs, risky=_queries_lake, check=_sql_problem,
+      timeout_s=lambda: config.SQL_TIMEOUT_S)
 def sql_query(args: SqlArgs, ctx: ToolContext):
     from ..datalake import get_lake
     from ..tools import _load_table

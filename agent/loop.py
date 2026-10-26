@@ -1,4 +1,4 @@
-"""Agent loop as a resumable step machine: plan -> execute -> review (agents.md §8).
+"""Agent loop as a resumable step machine: plan -> execute -> review (docs/design.md §8).
 
 status: planning -> running -> (awaiting_approval | awaiting_user -> running)* -> finished | aborted
 

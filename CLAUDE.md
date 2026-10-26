@@ -1,7 +1,7 @@
 # Instructions for coding assistants
 
-This repo is a Python agent that runs on a text-only model (production: the GPT CLI). `agents.md` is the design spec;
-read the section relevant to your task before changing code. `README.md` has setup steps.
+This repo is a Python agent that runs on a text-only model (production: the GPT CLI). `docs/design.md` is the design spec;
+read the section relevant to your task before changing code. `docs/setup.md` has setup steps; `docs/README.md` lists all documentation.
 
 ## Commands
 - Tests: `python -m unittest discover -s tests -t .` (must pass before you finish any task)
@@ -39,17 +39,17 @@ read the section relevant to your task before changing code. `README.md` has set
 - Every number in a final answer must trace to a tool result, a skill reference or the user's instruction
   (`loop.uncited_numbers`, checked before the LLM reviewer).
 - Never put real or confidential data in tests, fixtures or `sandbox/`. Use synthetic data.
-- Keep `agents.md` in sync when you change behaviour it describes.
-- **Adding a tool, toolkit, plugin or skill: follow `plugins/AGENTS.md` and only add files under `plugins/`
+- Keep `docs/design.md` in sync when you change behaviour it describes.
+- **Adding a tool, toolkit, plugin or skill: follow `docs/plugins.md` and only add files under `plugins/`
   (and their tests).** Do not change the infrastructure (`agent/`, `app.py`, `cli.py`, prompts, config) or the
-  docs (`agents.md`, `CLAUDE.md`, `README.md`, `plugins/AGENTS.md`) unless the user specifically agrees.
+  docs (`README.md`, `CLAUDE.md`, everything in `docs/`) unless the user specifically agrees.
 - Tools are offered per session: basic toolkits by default; others only when the user enables them (sidebar,
   `/name`, `--tools`) or accepts the agent's suggestion (`awaiting_choice` → `resolve_pending(choice=...)`).
 
 ## Recipes
 
 **Add a tool**: put it in a toolkit module under `plugins/tools/` (copy `_example_toolkit.py`), following
-`plugins/AGENTS.md`: a `TOOLKIT` dict, a Pydantic args model with field descriptions, then
+`docs/plugins.md`: a `TOOLKIT` dict, a Pydantic args model with field descriptions, then
 ```python
 @tool("name", "What it returns, how big, and when NOT to use it.", ArgsModel, risky=False)
 def name(args: ArgsModel, ctx: ToolContext):
@@ -94,7 +94,7 @@ or the module's `list_views`).
 - Production is a **closed environment**: the GPT CLI (the production GPT model), wrapped as `call(text, effort)` with
   effort `"none"` or `"medium"`, no native tool calling. Nothing here can be tested against it directly.
 - Development happens on the owner's Mac (Apple Silicon Mac mini), project at `~/Coding/agent-skeleton`.
-- Plan in three stages (see README.md): 1) FakeModel, 2) a local Ollama model as a stand-in for a
+- Plan in three stages (see docs/setup.md): 1) FakeModel, 2) a local Ollama model as a stand-in for a
   small model, 3) production. **Stages 1 and 2 are done; the framework is ready to ship (2026-10-25).**
   After shipping, skills, tools and evals are built for real data inside the closed environment with a
   GPT CLI, following `docs/maintenance.md`. The framework (`agent/`, prompts, UI) should rarely change.
@@ -129,8 +129,9 @@ or the module's `list_views`).
 - Standard library + pydantic/pandas/openpyxl/streamlit only, because production is closed.
 
 ## Known limitations / gotchas
-- Tool timeouts use a thread: a timed-out tool keeps running in the background. Acceptable locally;
-  revisit for production.
+- Tool timeouts use a thread: a timed-out tool keeps running in the background. Tools get `TOOL_TIMEOUT_S` (30 s);
+  `sql_query` gets `SQL_TIMEOUT_S` (900 s, lake queries can run 15 minutes). A query cut off or stopped by the user
+  keeps running on the lake server until it ends: set the lake driver's own query timeout to match.
 - `pysandbox` has no OS-level network or memory isolation (imports and readers are restricted instead, and a
   CPU/time limit applies). Review with security before production.
 - `recall` and `search_docs` are keyword-only (no embeddings).

@@ -6,7 +6,7 @@ Read this before adding a tool, toolkit, plugin or skill. It is the contract bet
 When you are asked to create a new tool, toolkit, plugin or skill, **only add files under `plugins/`**
 (`plugins/tools/*.py`, `plugins/skills/*.md`) and their tests (`tests/test_plugin_<name>.py`).
 **Do not change the infrastructure layer** (`agent/`, `app.py`, `cli.py`, `agent/prompts/`, `agent/config.py`,
-`smoke_model.py`) **or the docs** (`agents.md`, `CLAUDE.md`, `README.md`, this file) unless the user
+`smoke_model.py`) **or the docs** (`README.md`, `CLAUDE.md`, everything in `docs/`) unless the user
 specifically agrees. If the plugin seems to need an infrastructure change, stop and ask; describe the change.
 
 ## How plugins connect to the agent
@@ -41,7 +41,8 @@ Rules:
 - Files: only inside the sandbox, via `sandbox_path(path)`. Scratch tables go to `config.work_dir(ctx.run_id)`;
   anything delivered to the user (outputs, sends, deletes) must be `risky=True` (the user approves it).
 - Errors: raise `ToolError("clear message the model can act on")`. `dispatch` turns any exception into an
-  observation; never let a tool crash the loop. Tools run with a timeout (`config.TOOL_TIMEOUT_S`).
+  observation; never let a tool crash the loop. Tools run with a timeout (`config.TOOL_TIMEOUT_S`, 30 s); a tool that legitimately runs longer passes
+  `timeout_s=lambda: <seconds>` to `@tool` (as `sql_query` does with `config.SQL_TIMEOUT_S`).
 - Keep previews small (the model sees `preview`, truncated); put full data in `full` or a work table.
 - Use only the standard library and the packages in `requirements.txt` (production is closed).
 - Synthetic data only, in code, tests and `sandbox/`.

@@ -3,7 +3,7 @@
 Built in:     agent/toolkits/*.py
 Added later:  plugins/tools/*.py   (same contract as the built-in toolkits)
               plugins/skills/*.md  (see agent/skills.py)
-The contract for both is in plugins/AGENTS.md. A plugin that fails to load is reported in ERRORS
+The contract for both is in docs/plugins.md. A plugin that fails to load is reported in ERRORS
 instead of breaking the app, so a half-written plugin never takes the agent down.
 """
 from __future__ import annotations

@@ -22,7 +22,7 @@ class GptPack(TempDirs):
     def test_skill_pack_carries_contract_tools_example_and_dictionary(self):
         pack = gpt_pack.build("skill", "Compare leverage by region", like="limit_breach_analysis")
         self.assertIn("Compare leverage by region", pack)
-        for part in ("plugins/AGENTS.md", "TOOLS THE AGENT HAS", "sql_query",
+        for part in ("docs/plugins.md", "TOOLS THE AGENT HAS", "sql_query",
                      "plugins/skills/limit_breach_analysis.md", "datalake_dictionary.md"):
             self.assertIn(part, pack)
 

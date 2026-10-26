@@ -1,4 +1,4 @@
-"""Read-only data lake access for the SQL tools (agents.md §6).
+"""Read-only data lake access for the SQL tools (docs/design.md §6).
 
 Production reaches the lake with SQL over ODBC: copy agent/backends/datalake_odbc_template.py, fill it in
 inside the closed environment and set DATALAKE=<module name>. Development uses either an in-memory SQLite

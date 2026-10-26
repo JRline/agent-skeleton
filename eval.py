@@ -1,4 +1,4 @@
-"""Score a backend on the golden tasks (agents.md §14). Works unchanged against `prod`.
+"""Score a backend on the golden tasks (docs/design.md §14). Works unchanged against `prod`.
 
   python eval.py --backend claude                 # every task in tests/golden/
   python eval.py --backend ollama --only cet1_latest,total_rwa

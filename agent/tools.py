@@ -1,8 +1,8 @@
-"""Tool registry, shared helpers and dispatch (agents.md §6).
+"""Tool registry, shared helpers and dispatch (docs/design.md §6).
 
 Tools live in toolkits: agent/toolkits/*.py (built in) and plugins/tools/*.py (added later), loaded by
 agent/plugins.py. Each toolkit module defines TOOLKIT = {...} and decorates functions
-`fn(args, ctx) -> str | ToolOutput` with @tool(...); see plugins/AGENTS.md. The system prompt is rendered
+`fn(args, ctx) -> str | ToolOutput` with @tool(...); see docs/plugins.md. The system prompt is rendered
 from the session's enabled tools, so the model only sees what it may use.
 """
 from __future__ import annotations
@@ -33,6 +33,7 @@ class Tool:
     toolkit: str = "core"    # from the defining module's TOOLKIT["name"]; "core" tools are always enabled
     check: Callable | None = None  # check(args) -> problem or None; runs before approval is asked
     preview_chars: int | None = None  # observation size for this tool (default OBS_PREVIEW_CHARS)
+    timeout_s: Callable[[], int] | None = None  # this tool's time limit, read at call time (default TOOL_TIMEOUT_S)
 
 
 @dataclass
@@ -53,14 +54,15 @@ TOOLS: dict[str, Tool] = {}
 
 
 def tool(name: str, desc: str, args: type[BaseModel], risky: bool = False, special: bool = False,
-         check: Callable | None = None, preview_chars: int | None = None):
+         check: Callable | None = None, preview_chars: int | None = None,
+         timeout_s: Callable[[], int] | None = None):
     def wrap(fn):
         module = sys.modules.get(getattr(fn, "__module__", ""), None)
         toolkit = getattr(module, "TOOLKIT", {}).get("name", "core")
         old = TOOLS.get(name)
         if old and old.fn and fn and old.fn.__module__ != fn.__module__:
             raise ValueError(f"tool name {name!r} is already defined in {old.fn.__module__}")
-        TOOLS[name] = Tool(name, desc, args, fn, risky, special, toolkit, check, preview_chars)
+        TOOLS[name] = Tool(name, desc, args, fn, risky, special, toolkit, check, preview_chars, timeout_s)
         return fn
     return wrap
 
@@ -221,11 +223,12 @@ def dispatch(name: str, args: dict, ctx: ToolContext, ref: str) -> dict:
         parsed = t.args.model_validate(args)
     except ValidationError as e:
         return {"ok": False, "ref": ref, "error": f"Bad input: {e.errors()[0]['msg']}"}
+    limit = t.timeout_s() if t.timeout_s else config.TOOL_TIMEOUT_S
     pool = ThreadPoolExecutor(max_workers=1)
     try:
-        out = pool.submit(t.fn, parsed, replace(ctx, ref=ref)).result(timeout=config.TOOL_TIMEOUT_S)
+        out = pool.submit(t.fn, parsed, replace(ctx, ref=ref)).result(timeout=limit)
     except FutureTimeout:
-        return {"ok": False, "ref": ref, "error": f"Timed out after {config.TOOL_TIMEOUT_S}s."}
+        return {"ok": False, "ref": ref, "error": f"Timed out after {limit}s."}
     except Exception as e:
         return {"ok": False, "ref": ref, "error": f"{type(e).__name__}: {e}"[:500]}
     finally:

@@ -9,4 +9,4 @@
   should give. Swap them per environment so they name that environment's skills.
 
 Maintaining these with the GPT CLI: `docs/maintenance.md` and `python scripts/gpt_pack.py`.
-Coding agents: follow `AGENTS.md` (contract, tests, and the rule to leave the infrastructure alone).
+The contract (format, tests, and the rule to leave the infrastructure alone) is in `docs/plugins.md`.

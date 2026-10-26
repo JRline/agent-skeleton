@@ -1,4 +1,4 @@
-"""Working state, persistence, logging and prompt building (agents.md §7, §13)."""
+"""Working state, persistence, logging and prompt building (docs/design.md §7, §13)."""
 from __future__ import annotations
 
 import json

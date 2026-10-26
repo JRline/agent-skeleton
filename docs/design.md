@@ -1,4 +1,4 @@
-# agents.md — Python agent over a chat-only LLM API
+# Design spec — Python agent over a text-only model API
 
 Design spec for a small, auditable agent that runs on a chat-only model
 (the production GPT model, effort `none` or `medium`) through an existing API module.
@@ -81,7 +81,7 @@ agent/
   prompts/        # system.md, planner.md, reviewer.md, action_review.md, summariser.md, finisher.md
   settings.py     # user prompt settings: role, answer style, template overrides (settings/prompts.json)
   config.py       # budgets, limits, effort policy, paths, backend choice
-plugins/          # extension point: tools/*.py (toolkits), skills/*.md, README.md, AGENTS.md (contract + rule)
+plugins/          # extension point: tools/*.py (toolkits), skills/*.md, examples/, README.md (contract: docs/plugins.md)
 runs/             # one folder per run: state.json, log.jsonl, outputs/
 sandbox/          # the only folder tools may read or write
   inputs/         # input files (uploads land here)
@@ -208,7 +208,7 @@ is listed in `plugins.ERRORS` instead of breaking the app; duplicate toolkit or 
 Built-in, all basic: `files`, `docs`, `analysis`, `datalake`. `guidance` is prompt text added only
 while the toolkit is enabled. Lake data is never a file the tools can open: it lives outside the sandbox
 (`mock_lake/data/`), and goes only through the `datalake` toolkit, as it will in production. The contract for new toolkits and skills is
-`plugins/AGENTS.md`. **Rule:** an agent asked to add a tool, toolkit, plugin or skill only adds files under
+`docs/plugins.md`. **Rule:** an agent asked to add a tool, toolkit, plugin or skill only adds files under
 `plugins/` (and tests); it does not change the infrastructure (`agent/`, `app.py`, `cli.py`, prompts, config)
 or the docs unless the user specifically agrees.
 

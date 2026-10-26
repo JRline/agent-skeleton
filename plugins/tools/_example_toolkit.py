@@ -1,7 +1,7 @@
 """Template toolkit. Files starting with "_" are not loaded: copy this to e.g. plugins/tools/fx.py and edit.
 
 A toolkit is one module: a TOOLKIT dict plus tools registered with @tool. The contract is in
-plugins/AGENTS.md. Keep it self-contained: import from agent.tools only (no changes to agent/).
+docs/plugins.md. Keep it self-contained: import from agent.tools only (no changes to agent/).
 """
 from __future__ import annotations
 

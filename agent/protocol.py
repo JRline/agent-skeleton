@@ -1,4 +1,4 @@
-"""JSON action protocol: parsing, validation and repair (agents.md §5)."""
+"""JSON action protocol: parsing, validation and repair (docs/design.md §5)."""
 from __future__ import annotations
 
 import json

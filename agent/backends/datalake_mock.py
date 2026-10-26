@@ -13,7 +13,6 @@ import urllib.request
 
 from .. import config
 
-TIMEOUT_S = 30
 
 
 def _url() -> str:
@@ -35,7 +34,7 @@ def _call(path: str, body: dict | None = None) -> dict:
     if os.getenv("MOCK_LAKE_TOKEN"):
         req.add_header("Authorization", f"Bearer {os.environ['MOCK_LAKE_TOKEN']}")
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+        with urllib.request.urlopen(req, timeout=config.SQL_TIMEOUT_S) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         try:

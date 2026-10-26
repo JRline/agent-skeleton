@@ -1,4 +1,4 @@
-"""Budgets, limits, effort policy and paths (agents.md §9, §11).
+"""Budgets, limits, effort policy and paths (docs/design.md §9, §11).
 
 Everything is read at call time as `config.X`, so tests can point the paths
 at a temporary folder by assigning to these attributes.
@@ -44,7 +44,7 @@ PY_MAX_ROWS = 100_000           # rows a code result may return
 REVIEW_CITED_CHARS = 8000      # full tool outputs cited in a final answer, shown to the reviewer
 CONTEXT_INLINE_TOKENS = 1500   # context docs up to this size go into the prompt; larger ones via search_docs
 
-# ---------------------------------------------------------------- plugins (see plugins/AGENTS.md)
+# ---------------------------------------------------------------- plugins (see docs/plugins.md)
 PLUGINS_DIR = Path(os.getenv("AGENT_PLUGINS", Path(__file__).resolve().parent.parent / "plugins"))
 SKILLS_DIR = Path(os.getenv("AGENT_SKILLS", PLUGINS_DIR / "skills"))
 # Worked examples for prompts (examples/<prompt>.md); swapped per environment like skills
@@ -64,7 +64,10 @@ PROMPT_BUDGET_TOKENS = 6000     # rough budget per model call (chars / 4)
 RECENT_TURNS = 6                # exchanges kept verbatim before summarising
 MAX_FACTS = 30
 OBS_PREVIEW_CHARS = 1500        # observation text sent back to the model
-TOOL_TIMEOUT_S = 30
+TOOL_TIMEOUT_S = int(os.getenv("TOOL_TIMEOUT_S", "30"))     # default limit for one tool call
+# A lake query on a large view can legitimately run for many minutes; only sql_query gets this longer limit,
+# so a stuck file read or search still fails fast.
+SQL_TIMEOUT_S = int(os.getenv("SQL_TIMEOUT_S", "900"))
 
 # ---------------------------------------------------------------- effort policy
 EFFORT = {

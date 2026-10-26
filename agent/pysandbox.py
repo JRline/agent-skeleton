@@ -1,4 +1,4 @@
-"""Runs model-written analysis code: data in, one result out, nothing else (agents.md §6).
+"""Runs model-written analysis code: data in, one result out, nothing else (docs/design.md §6).
 
 Two layers, so one mistake is not enough to do harm:
 1. `check_code`: a static AST check before the user is even asked to approve. Imports only from

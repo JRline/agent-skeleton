@@ -11,7 +11,8 @@ NAME = "production lake (odbc)"
 
 
 def connect():
-    """Return a DB-API connection to the data lake. Must be read-only."""
+    """Return a DB-API connection to the data lake. Must be read-only. Set the driver's query timeout to at
+    least config.SQL_TIMEOUT_S (15 minutes by default), or long queries are cut off by the driver first."""
     # Example only. Check that pyodbc and the lake's ODBC driver exist in production first:
     # import os, pyodbc
     # return pyodbc.connect(f"DSN={os.environ['LAKE_DSN']}", readonly=True, autocommit=True)

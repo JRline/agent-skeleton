@@ -81,11 +81,11 @@ def build(task: str, request: str, like: str | None = None, run: str | None = No
     prompt = (ROOT / "docs" / "gpt_prompts" / f"{task}.md").read_text().replace("{request}", request.strip())
     parts = [prompt]
     if task == "skill":
-        parts += [file_block("plugins/AGENTS.md"), block("TOOLS THE AGENT HAS", tool_list()),
+        parts += [file_block("docs/plugins.md"), block("TOOLS THE AGENT HAS", tool_list()),
                   block("EXISTING SKILLS", render_skill_list()),
                   file_block(f"plugins/skills/{like or 'usage_comparison'}.md"), dictionary_block()]
     elif task == "toolkit":
-        parts += [file_block("plugins/AGENTS.md"), file_block("plugins/tools/_example_toolkit.py"),
+        parts += [file_block("docs/plugins.md"), file_block("plugins/tools/_example_toolkit.py"),
                   block("TOOLS THE AGENT ALREADY HAS", tool_list())]
     elif task == "golden":
         golden = sorted((ROOT / "tests" / "golden").glob("*.json"))

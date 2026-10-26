@@ -1,4 +1,4 @@
-"""FakeModel backends: no LLM needed (agents.md §14).
+"""FakeModel backends: no LLM needed (docs/design.md §14).
 
 FakeModel      - scripted replies for tests. Give a list (consumed in call order)
                  or a dict {purpose: [replies]} (consumed per purpose). A reply may

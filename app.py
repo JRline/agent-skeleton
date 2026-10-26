@@ -1,4 +1,4 @@
-"""Streamlit UI (agents.md §12). Run:  streamlit run app.py
+"""Streamlit UI (docs/design.md §12). Run:  streamlit run app.py
 
 The UI holds no agent logic: each rerun advances the step machine by one step, renders the conversation,
 and collects approvals, answers and choices. A conversation is one saved run: after an answer, a new
@@ -473,8 +473,8 @@ if s:
 
 # ---------------------------------------------------------------- drive the step machine
 JOB_NOTES = {
-    "sql_query": ("Querying the data lake", "Large queries can take several minutes. The result appears here when it "
-                                            "finishes; you can leave this page open."),
+    "sql_query": ("Querying the data lake", f"Large queries can take up to {config.SQL_TIMEOUT_S // 60} minutes. The "
+                                            "result appears here when it finishes; you can leave this page open."),
     "run_python": ("Running the analysis", ""),
     "read_file": ("Reading your file", ""),
 }

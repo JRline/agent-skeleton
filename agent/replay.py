@@ -378,7 +378,7 @@ def run_sql(sql: str) -> pd.DataFrame:
                                  headers={{"Content-Type": "application/json"}})
     if os.getenv("MOCK_LAKE_TOKEN"):
         req.add_header("Authorization", f"Bearer {{os.environ['MOCK_LAKE_TOKEN']}}")
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    with urllib.request.urlopen(req, timeout=int(os.getenv("SQL_TIMEOUT_S", "900"))) as resp:
         out = json.loads(resp.read())
     return pd.DataFrame(out["rows"], columns=out["columns"])
 
