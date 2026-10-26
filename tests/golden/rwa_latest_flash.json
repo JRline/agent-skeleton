@@ -1,0 +1,17 @@
+{
+  "id": "rwa_latest_flash",
+  "instruction": "What does the flash figure show for DemoBank's total RWA usage on 2026-03-31?",
+  "expect_numbers": [
+    {
+      "value": 243983,
+      "tol": 0.5
+    }
+  ],
+  "expect_keywords": [
+    [
+      "flash",
+      "EARLY"
+    ]
+  ],
+  "max_steps": 10
+}

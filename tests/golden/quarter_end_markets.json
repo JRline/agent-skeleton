@@ -1,0 +1,23 @@
+{
+  "id": "quarter_end_markets",
+  "instruction": "What were Global Markets' RWA usage and limit at the end of FY2025Q3?",
+  "expect_numbers": [
+    {
+      "value": 69538,
+      "tol": 0.5
+    },
+    {
+      "value": 88380,
+      "tol": 0.5
+    }
+  ],
+  "expect_keywords": [
+    [
+      "2025-12-30",
+      "30 Dec 2025",
+      "30 December 2025",
+      "December 30, 2025"
+    ]
+  ],
+  "max_steps": 12
+}

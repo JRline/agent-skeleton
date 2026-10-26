@@ -1,0 +1,27 @@
+{
+  "id": "breach_source_limit_cut",
+  "instruction": "Term Loans in Tokyo has been above its RWA limit since early January 2026. What caused the breach?",
+  "expect_numbers": [
+    {
+      "value": 29810,
+      "tol": 0.5
+    },
+    {
+      "value": 22110,
+      "tol": 0.5
+    }
+  ],
+  "expect_keywords": [
+    [
+      "limit cut",
+      "limit reduction",
+      "limit was reduced",
+      "lower limit",
+      "limit fell",
+      "reduced limit",
+      "cut the limit",
+      "limit decreased"
+    ]
+  ],
+  "max_steps": 12
+}

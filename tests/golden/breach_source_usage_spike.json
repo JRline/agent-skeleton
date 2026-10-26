@@ -1,0 +1,20 @@
+{
+  "id": "breach_source_usage_spike",
+  "instruction": "What caused FX Options in London to breach its RWA limit in March 2026?",
+  "expect_keywords": [
+    [
+      "market risk",
+      "FRTB-SA",
+      "standardised approach",
+      "MKT_STD"
+    ],
+    [
+      "increase",
+      "rose",
+      "spike",
+      "jump",
+      "higher usage"
+    ]
+  ],
+  "max_steps": 12
+}

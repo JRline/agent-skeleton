@@ -1,0 +1,9 @@
+# Read by `streamlit run app.py` when started from the project folder.
+
+[server]
+# Listen on this machine only. Streamlit's default exposes the UI to the local network.
+address = "localhost"
+
+[browser]
+# Do not send usage statistics to Streamlit.
+gatherUsageStats = false

@@ -1,0 +1,23 @@
+# Environment and caches
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Local tool settings (per developer)
+.claude/
+.streamlit/secrets.toml
+
+# No data or history in the repository: logs, past runs, evals, user settings
+runs/
+settings/
+
+# No sample data: built by `python scripts/setup_local.py`
+mock_lake/data/
+sandbox/inputs/
+sandbox/outputs/
+sandbox/work/
+sandbox/context/
+
+# Coding-agent tooling (per developer)
+.agents/

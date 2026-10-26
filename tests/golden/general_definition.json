@@ -1,0 +1,9 @@
+{
+  "id": "general_definition",
+  "instruction": "What does RWA stand for? Answer in one sentence.",
+  "expect_keywords": [
+    "risk-weighted assets"
+  ],
+  "max_tool_calls": 0,
+  "max_steps": 12
+}

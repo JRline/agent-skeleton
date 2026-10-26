@@ -1,0 +1,14 @@
+{
+  "id": "file_average",
+  "instruction": "What is the average RWA in inputs/sample_capital.csv?",
+  "inputs": [
+    "inputs/sample_capital.csv"
+  ],
+  "expect_numbers": [
+    {
+      "value": 98666.67,
+      "tol": 0.01
+    }
+  ],
+  "max_steps": 12
+}

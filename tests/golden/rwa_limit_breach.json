@@ -1,0 +1,26 @@
+{
+  "id": "rwa_limit_breach",
+  "instruction": "In FY2025, which products and regions had RWA usage above their limits, for which RWA component, and from when to when?",
+  "expect_keywords": [
+    [
+      "Equity Derivatives",
+      "GM-EQ-DER"
+    ],
+    "Hong Kong",
+    "2025-11-10",
+    "2025-12-30",
+    [
+      "Term Loans",
+      "CIB-CL-TL"
+    ],
+    "2026-01-05",
+    [
+      "FX Options",
+      "GM-FX-OPT"
+    ],
+    "London",
+    "2026-03-02",
+    "2026-03-13"
+  ],
+  "max_steps": 14
+}

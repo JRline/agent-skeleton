@@ -1,0 +1,23 @@
+{
+  "id": "fy_average_by_division",
+  "instruction": "What was the average daily final RWA usage by division over FY2025?",
+  "expect_numbers": [
+    {
+      "value": 120362.59,
+      "tol": 1
+    },
+    {
+      "value": 69111.59,
+      "tol": 1
+    },
+    {
+      "value": 44421.71,
+      "tol": 1
+    },
+    {
+      "value": 6894.83,
+      "tol": 1
+    }
+  ],
+  "max_steps": 12
+}

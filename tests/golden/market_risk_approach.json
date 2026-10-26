@@ -1,0 +1,15 @@
+{
+  "id": "market_risk_approach",
+  "instruction": "How is DemoBank's latest market risk RWA split between the standardised and internal models approaches?",
+  "expect_numbers": [
+    {
+      "value": 15537,
+      "tol": 0.5
+    },
+    {
+      "value": 17420,
+      "tol": 0.5
+    }
+  ],
+  "max_steps": 10
+}

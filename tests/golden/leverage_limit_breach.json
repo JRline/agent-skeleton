@@ -1,0 +1,15 @@
+{
+  "id": "leverage_limit_breach",
+  "instruction": "In FY2025, which product and region had leverage exposure usage above its limit, and from when to when?",
+  "expect_keywords": [
+    [
+      "Repo & Securities Lending",
+      "GM-FN-REPO",
+      "Repo"
+    ],
+    "Tokyo",
+    "2026-02-02",
+    "2026-02-20"
+  ],
+  "max_steps": 14
+}

@@ -1,0 +1,27 @@
+{
+  "id": "rwa_by_risk_type",
+  "instruction": "Break down DemoBank's latest RWA usage by risk type.",
+  "expect_numbers": [
+    {
+      "value": 154038,
+      "tol": 0.5
+    },
+    {
+      "value": 32957,
+      "tol": 0.5
+    },
+    {
+      "value": 21760,
+      "tol": 0.5
+    },
+    {
+      "value": 21229,
+      "tol": 0.5
+    },
+    {
+      "value": 245463,
+      "tol": 0.5
+    }
+  ],
+  "max_steps": 12
+}

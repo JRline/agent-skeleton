@@ -1,0 +1,110 @@
+"""Model adapter (agents.md §4).
+
+The rest of the code calls only `ChatModel.complete(messages, effort, stop, purpose)`.
+Any backend module that exposes `call(text: str, effort: str) -> str` can be wrapped
+with `ModuleChatModel`, so production, Ollama and test stubs are interchangeable.
+"""
+from __future__ import annotations
+
+import importlib
+import time
+from typing import Literal
+
+from . import config
+
+Effort = Literal["none", "medium"]
+Message = dict  # {"role": "system" | "user" | "assistant", "content": str}
+
+
+class CallCancelled(Exception):
+    """A backend call was cancelled on purpose (Stop button). Never retried."""
+
+
+class ChatModel:
+    """The only interface the agent depends on. Stateless: pass the full message list."""
+
+    name = "base"
+
+    def complete(self, messages: list[Message], effort: Effort = "none",
+                 stop: list[str] | None = None, purpose: str = "executor") -> str:
+        raise NotImplementedError
+
+    def model_id(self, effort: Effort = "none") -> str:
+        """Which model answers at this effort, for the log, so runs on different models can be compared."""
+        return self.name
+
+    def cancel(self) -> None:
+        """Abandon in-flight calls if the backend can; called from another thread. Default: no-op."""
+
+
+def render(messages: list[Message]) -> str:
+    """Flatten role-tagged messages into one string for single-text APIs."""
+    parts = [f"{m['role'].upper()}:\n{m['content']}" for m in messages]
+    parts.append("Reply as ASSISTANT. Output only your reply.")
+    return "\n\n".join(parts)
+
+
+def apply_stop(text: str, stop: list[str] | None) -> str:
+    """Emulate stop sequences by truncating at the first one found."""
+    if not stop:
+        return text
+    cuts = [text.find(s) for s in stop if s in text]
+    return text[: min(cuts)] if cuts else text
+
+
+class ModuleChatModel(ChatModel):
+    """Wraps a module exposing `call(text, effort) -> str` with retries and stop emulation.
+
+    Set pass_messages=True if the module accepts the role-tagged message list directly.
+    """
+
+    def __init__(self, module, name: str, retries: int | None = None,
+                 backoff: float = 2.0, pass_messages: bool = False):
+        self.module = module
+        self.name = name
+        self.retries = retries or config.MODEL_RETRIES
+        self.backoff = backoff
+        self.pass_messages = pass_messages
+
+    def complete(self, messages, effort="none", stop=None, purpose="executor"):
+        payload = messages if self.pass_messages else render(messages)
+        for attempt in range(self.retries):
+            try:
+                out = self.module.call(payload, effort=effort)
+                return apply_stop(out, stop)
+            except CallCancelled:
+                raise
+            except Exception:
+                if attempt == self.retries - 1:
+                    raise
+                time.sleep(self.backoff ** attempt)
+        raise RuntimeError("unreachable")
+
+    def model_id(self, effort="none"):
+        """Uses the module's optional `model_name(effort)`; modules without it log the backend name."""
+        fn = getattr(self.module, "model_name", None)
+        return fn(effort) if callable(fn) else self.name
+
+    def cancel(self):
+        """Uses the module's optional `cancel()`; production modules without it simply finish the call."""
+        fn = getattr(self.module, "cancel", None)
+        if callable(fn):
+            fn()
+
+
+def get_model(backend: str | None = None) -> ChatModel:
+    """Build the model for a backend name: fake | ollama | claude | prod."""
+    backend = backend or config.BACKEND
+    if backend == "fake":
+        from .backends.fake import DemoFakeModel
+        return DemoFakeModel()
+    if backend == "ollama":
+        from .backends import ollama_api
+        return ModuleChatModel(ollama_api, "ollama", pass_messages=True)
+    if backend == "claude":
+        from .backends import claude_cli
+        return ModuleChatModel(claude_cli, "claude", pass_messages=True)
+    if backend == "prod":
+        module = importlib.import_module(config.PROD_API_MODULE)
+        return ModuleChatModel(module, "prod")
+    raise ValueError(f"Unknown backend {backend!r}. Use fake, ollama, claude or prod.")

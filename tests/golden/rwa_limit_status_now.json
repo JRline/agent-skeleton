@@ -1,0 +1,20 @@
+{
+  "id": "rwa_limit_status_now",
+  "instruction": "Is anything over its RWA limit right now?",
+  "expect_numbers": [
+    {
+      "value": 1088,
+      "tol": 1
+    }
+  ],
+  "expect_keywords": [
+    [
+      "Term Loans",
+      "CIB-CL-TL"
+    ],
+    "Tokyo",
+    "2026-03-26"
+  ],
+  "max_asks": 0,
+  "max_steps": 8
+}

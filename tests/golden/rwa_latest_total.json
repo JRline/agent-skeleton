@@ -1,0 +1,15 @@
+{
+  "id": "rwa_latest_total",
+  "instruction": "What is DemoBank's latest total RWA usage?",
+  "expect_numbers": [
+    {
+      "value": 245463,
+      "tol": 0.5
+    }
+  ],
+  "expect_keywords": [
+    "2026-03-26"
+  ],
+  "max_steps": 10,
+  "max_asks": 0
+}

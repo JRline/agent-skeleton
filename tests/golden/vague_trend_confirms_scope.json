@@ -1,0 +1,6 @@
+{
+  "id": "vague_trend_confirms_scope",
+  "instruction": "How has RWA moved?",
+  "expect_ask": true,
+  "max_steps": 14
+}

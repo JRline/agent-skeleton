@@ -1,0 +1,14 @@
+{
+  "id": "leverage_latest_total",
+  "instruction": "What is DemoBank's latest leverage exposure usage?",
+  "expect_numbers": [
+    {
+      "value": 842642,
+      "tol": 0.5
+    }
+  ],
+  "expect_keywords": [
+    "2026-03-24"
+  ],
+  "max_steps": 10
+}
