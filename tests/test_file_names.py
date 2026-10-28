@@ -1,10 +1,11 @@
 """File names with spaces or typos reach every model quoted and are kept exactly as written.
 (A small model once rewrote "daily captial.xlsx" as "daily_captial.xlsx", and the request check then
 rejected the correct name as invalid: three reads and a needless question to the user.)"""
+from agent.graph import first_prompt
 from agent import config
 from agent.backends.fake import FakeModel
-from agent.loop import plan, review_action
-from agent.memory import build_messages, new_state
+from agent.graph import plan, review_request
+from agent.memory import new_state
 from agent.tools import dispatch, quote_paths, ToolContext
 
 from tests.helpers import PLAN, TempDirs, j
@@ -19,7 +20,7 @@ class FileNames(TempDirs):
         self.assertEqual(quote_paths([]), "")
 
     def test_executor_sees_quoted_names_and_the_copy_exactly_rule(self):
-        system, intro = build_messages(new_state("what is in this file", inputs=[NAME]))[:2]
+        system, intro = first_prompt(new_state("what is in this file", inputs=[NAME]))[:2]
         self.assertIn(f"INPUT FILES: {QUOTED}", intro["content"])
         self.assertIn("character for character", system["content"])
 
@@ -30,7 +31,7 @@ class FileNames(TempDirs):
 
     def test_request_check_sees_the_input_files_and_accepts_spaces(self):
         model = FakeModel({"action_review": [j(ok=True, issues=[], explain="Reads the file.")]})
-        review_action(new_state("what is in this file", inputs=[NAME]), model, "read_file", {"path": NAME})
+        review_request(model, new_state("what is in this file", inputs=[NAME]), "read_file", {"path": NAME})
         prompt = model.calls[0]["messages"][0]["content"]
         self.assertIn(f"INPUT FILES (the user's files, exact names):\n{QUOTED}", prompt)
         self.assertIn("valid exactly as written", prompt)

@@ -33,8 +33,13 @@ class Citations(TempDirs):
         self.assertEqual(source_details(state, "ref", "nope-9")["title"], "not found in this conversation")
 
     def test_user_answers_are_sources_too(self):
+        from agent.backends.fake import FakeModel
+        from agent.loop import run_one_step
+        from tests.helpers import PLAN, tool_call
         state = new_state("g")
-        state["status"], state["pending"] = "awaiting_user", {"tool": "ask_user", "input": {"question": "Which period?"}}
+        m = FakeModel({"planner": [PLAN], "executor": [tool_call("ask_user", question="Which period?")]})
+        run_one_step(state, m)
+        run_one_step(state, m)
         resolve_pending(state, answer="2026Q3")
         ref = state["events"][-1]["payload"]["obs"]["ref"]
         d = source_details(state, "ref", ref)

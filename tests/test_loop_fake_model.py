@@ -1,4 +1,4 @@
-"""Step-machine tests with scripted FakeModel replies (no LLM)."""
+"""The LangGraph agent driven step by step with scripted FakeModel replies (no LLM)."""
 import json
 import shutil
 import types
@@ -8,7 +8,7 @@ from agent import config
 from agent.adapter import ModuleChatModel
 from agent.backends.fake import DemoFakeModel, FakeModel
 from agent.loop import abort, load_state, resolve_pending, run, run_one_step
-from agent.memory import build_messages, new_state, read_log
+from agent.memory import new_state, read_log
 
 from tests.helpers import OK, PLAN, TempDirs, final, j, tool_call
 
@@ -30,6 +30,10 @@ def model(executor, reviewer=(OK,), planner=(PLAN,), summariser=("- summary",)):
                       "reviewer": list(reviewer), "summariser": list(summariser)})
 
 
+def executor_prompts(m) -> list[list[dict]]:
+    return [c["messages"] for c in m.calls if c["purpose"] == "executor"]
+
+
 class HappyPath(LoopCase):
     def test_runs_to_finished_with_approval(self):
         m = model([READ, LOOKUP, WRITE, final("2026Q3 CET1 capital is 12850 [ref: read_file-1]")])
@@ -41,7 +45,6 @@ class HappyPath(LoopCase):
         self.assertEqual([e["kind"] for e in events],
                          ["plan", "tool", "tool", "approval", "user", "final"])
         self.assertTrue((config.outputs_dir(state["run_id"]) / "out.md").exists())
-        self.assertEqual(state["step"], 2)                 # two steps marked done
         self.assertEqual(len(state["facts"]), 3)
 
     def test_effort_policy(self):
@@ -58,10 +61,14 @@ class HappyPath(LoopCase):
         self.assertIn("tool", kinds)
         self.assertIn("review", kinds)
         self.assertEqual(load_state(state["run_id"])["status"], "finished")
+        self.assertTrue((config.RUNS_DIR / "checkpoints.sqlite").exists())    # the graph's own checkpoints
 
-    def test_model_name_is_logged(self):
+    def test_model_name_purpose_and_latency_are_logged(self):
         state = run("goal", model([READ, final()]))
-        self.assertEqual({e["model"] for e in read_log(state) if e["kind"] == "model"}, {"fake"})
+        calls = [e for e in read_log(state) if e["kind"] == "model"]
+        self.assertEqual({e["model"] for e in calls}, {"fake"})
+        self.assertEqual([e["purpose"] for e in calls], ["planner", "executor", "executor", "reviewer"])
+        self.assertTrue(all("latency_ms" in e and e["prompt_tokens"] > 0 for e in calls))
 
     def test_module_backend_reports_model_per_effort(self):
         with_name = types.SimpleNamespace(call=lambda text, effort: "",
@@ -70,22 +77,28 @@ class HappyPath(LoopCase):
         self.assertEqual(ModuleChatModel(with_name, "ollama").model_id("medium"), "small-medium")
         self.assertEqual(ModuleChatModel(without, "prod").model_id("none"), "prod")
 
-    def test_state_block_is_last_and_observation_fed_back(self):
+    def test_prompt_has_rules_tools_protocol_and_the_observation(self):
         m = model([READ, final()])
         run("goal", m)
-        second_call = [c for c in m.calls if c["purpose"] == "executor"][1]["messages"]
-        self.assertEqual(second_call[0]["role"], "system")
-        self.assertIn("OBSERVATION:", second_call[-1]["content"])
-        self.assertTrue(second_call[-1]["content"].rstrip().endswith("Reply with one JSON object."))
+        second = executor_prompts(m)[1]
+        self.assertEqual(second[0]["role"], "system")
+        for part in ("## Toolkit rules", "## Tools", "run_python", "## Reply protocol", "## Plan"):
+            self.assertIn(part, second[0]["content"])
+        self.assertEqual(second[1]["content"], "GOAL: goal")
+        self.assertTrue(second[-1]["content"].startswith("OBSERVATION: "))
+        self.assertIn('"read_file"', second[-2]["content"])          # its own call, as the JSON it wrote
 
 
 class HumanInTheLoop(LoopCase):
-    def test_rejection_is_fed_back_and_file_not_written(self):
+    def test_rejection_reason_is_fed_back_and_file_not_written(self):
         m = model([WRITE, final("Skipped writing.")])
-        state = run("goal", m, approve=lambda e: False)
+        state = run("goal", m, approve=lambda e: "write it to the shared folder instead")
         self.assertEqual(state["status"], "finished")
         self.assertFalse(config.outputs_dir(state["run_id"]).exists())
-        self.assertIn("User rejected write_file", json.dumps(state["turns"]))
+        self.assertIn("write it to the shared folder instead", executor_prompts(m)[-1][-1]["content"])
+        self.assertIn("USER REJECTED write_file because: write it to the shared folder instead", state["facts"])
+        user = [e for e in state["events"] if e["kind"] == "user"][0]["payload"]
+        self.assertEqual((user["approved"], user["reason"]), (False, "write it to the shared folder instead"))
 
     def test_ask_user_pauses_and_resumes(self):
         m = model([tool_call("ask_user", question="Which period?"), final("Using 2026Q3.")])
@@ -100,9 +113,11 @@ class HumanInTheLoop(LoopCase):
             resolve_pending(state, answer="  ")
         resolve_pending(state, answer="2026Q3")
         self.assertEqual(state["status"], "running")
-        self.assertIn("2026Q3", state["turns"][-1]["content"])
+        run_one_step(state, m)                             # the answer goes back to the model
         run_one_step(state, m)
         self.assertEqual(state["status"], "finished")
+        self.assertIn("2026Q3", executor_prompts(m)[-1][-1]["content"])
+        self.assertTrue(any(f.startswith("USER ANSWER to: Which period?") for f in state["facts"]))
 
     def test_resume_from_disk_while_awaiting_approval(self):
         m = model([WRITE, final()])
@@ -117,6 +132,20 @@ class HumanInTheLoop(LoopCase):
         self.assertEqual(final_state["status"], "finished")
         self.assertTrue((config.outputs_dir(state["run_id"]) / "out.md").exists())
 
+    def test_resume_in_a_new_process(self):
+        """Another process has no compiled graph yet: the checkpoint on disk is enough."""
+        from agent import loop
+        m = model([WRITE, final()])
+        state = new_state("goal")
+        run_one_step(state, m)
+        run_one_step(state, m)
+        loop._GRAPHS.clear()
+        loop._ACTIVE.clear()
+        restored = load_state(state["run_id"])
+        resolve_pending(restored, approved=True)
+        self.assertEqual(run("", model([final()], planner=()), state=restored)["status"], "finished")
+        self.assertTrue((config.outputs_dir(state["run_id"]) / "out.md").exists())
+
 
 class Recovery(LoopCase):
     def test_bad_json_is_repaired(self):
@@ -126,6 +155,7 @@ class Recovery(LoopCase):
         tool_ev = [e for e in events if e["kind"] == "tool"][0]
         self.assertEqual(tool_ev["payload"]["attempts"], 2)
         self.assertEqual(m.efforts("executor")[:2], ["none", "none"])
+        self.assertIn("Invalid output", executor_prompts(m)[1][-1]["content"])
 
     def test_tool_error_raises_effort_on_next_step(self):
         bad = tool_call("read_file", path="work/missing.csv")
@@ -134,10 +164,11 @@ class Recovery(LoopCase):
         self.assertEqual(m.efforts("executor"), ["none", "medium", "none"])
 
     def test_repeated_action_not_rerun_then_aborts(self):
-        m = model([READ, READ, READ])
+        m = FakeModel({"planner": [PLAN], "executor": [READ] * 3, "finisher": ["no json"] * 4})
         state = run("goal", m)
         self.assertEqual(state["status"], "aborted")
-        self.assertEqual(sum(1 for e in state["events"] if e["kind"] == "tool"), 1)
+        self.assertEqual(sum(1 for e in state["events"] if e["kind"] == "tool"
+                             and e["payload"]["obs"].get("ok")), 1)
         self.assertIn("Repeated", state["events"][-1]["payload"]["reason"])
 
     def test_reviewer_rejects_then_accepts(self):
@@ -146,7 +177,8 @@ class Recovery(LoopCase):
         state = run("goal", m)
         self.assertEqual(state["status"], "finished")
         self.assertIn("ref", state["final"])
-        self.assertIn("Numbers lack refs", json.dumps(state["turns"]))
+        self.assertIn("Numbers lack refs", executor_prompts(m)[-1][-1]["content"])
+        self.assertEqual([e["kind"] for e in state["events"]][-2:], ["review", "final"])
 
     def test_reviewer_rejections_capped_with_warning(self):
         no = j(ok=False, issues=["x"])
@@ -156,10 +188,12 @@ class Recovery(LoopCase):
         self.assertEqual(state["status"], "finished")
         self.assertTrue(state["warnings"])
 
-    def test_unparseable_replies_abort(self):
+    def test_unparseable_replies_stop_with_a_retryable_error(self):
         m = model(["nope"] * 8)
         state = run("goal", m)
-        self.assertEqual(state["status"], "aborted")
+        self.assertEqual(state["events"][-1]["kind"], "model_error")
+        self.assertIn("outside the protocol", state["events"][-1]["payload"]["error"])
+        self.assertEqual(m.efforts("executor"), ["none", "none", "none", "medium"])
 
     def test_step_limit(self):
         old = config.MAX_STEPS
@@ -176,7 +210,7 @@ class Recovery(LoopCase):
         m = model([final()], planner=["x"] * 4)
         state = run("my goal", m)
         self.assertEqual(state["plan"], ["my goal"])
-        self.assertTrue(state["warnings"])
+        self.assertEqual(state["status"], "finished")
 
 
 def unreachable(messages):
@@ -186,8 +220,12 @@ def unreachable(messages):
 class ModelFailure(LoopCase):
     def test_planner_failure_is_retryable_event(self):
         m = model([READ, final()], planner=(unreachable, PLAN))
-        state = new_state("goal")
-        ev = run_one_step(state, m)
+        old, config.MODEL_RETRIES = config.MODEL_RETRIES, 1
+        try:
+            state = new_state("goal")
+            ev = run_one_step(state, m)
+        finally:
+            config.MODEL_RETRIES = old
         self.assertEqual(ev["kind"], "model_error")
         self.assertIn("Connection refused", ev["payload"]["error"])
         self.assertEqual(state["status"], "planning")      # nothing advanced
@@ -195,17 +233,14 @@ class ModelFailure(LoopCase):
         run_one_step(state, m)                              # retry succeeds
         self.assertEqual(state["status"], "running")
 
-    def test_failed_step_is_rolled_back(self):
+    def test_failed_step_resumes_from_the_checkpoint(self):
         m = model([READ, final(), final()], reviewer=(unreachable, OK))
         state = new_state("goal")
         while not state["events"] or state["events"][-1]["kind"] != "model_error":
-            if state["status"] == "awaiting_approval":         # reading an input file asks first
-                resolve_pending(state, approved=True)
-            else:
-                run_one_step(state, m)
-        self.assertEqual(state["step_count"], 1)            # the final-answer step did not count
+            run_one_step(state, m)
+        self.assertEqual(state["step_count"], 1)
         self.assertEqual(state["status"], "running")
-        run_one_step(state, m)                              # retry reruns executor + reviewer
+        run_one_step(state, m)                              # retry: executor + reviewer again
         self.assertEqual(state["status"], "finished")
         self.assertIn("model_error", [e["kind"] for e in read_log(state)])
 
@@ -226,15 +261,6 @@ class Planner(LoopCase):
         run_one_step(state, model([final()], planner=(j(plan=["read_file", "recall", "search_docs"]),)))
         self.assertEqual(state["plan"], ["What is in this file?"])
 
-    def test_repeating_a_successful_call_moves_the_plan_on(self):
-        unfinished = tool_call("read_file", path="work/sample_capital.csv")        # step_done false
-        m = model([unfinished, unfinished, final("The file has 3 rows [ref: read_file-1]")],
-                  planner=(j(plan=["Read the file"]),))
-        state = run("What is in the file?", m)
-        self.assertEqual(state["status"], "finished")
-        third = [c for c in m.calls if c["purpose"] == "executor"][2]["messages"][-1]["content"]
-        self.assertIn("All plan steps are done", third)
-
     def test_one_step_plan_is_kept(self):
         state = new_state("What is CET1?")
         run_one_step(state, model([final()], planner=(j(plan=["Answer the question"]),)))
@@ -248,8 +274,7 @@ class CitationCheck(LoopCase):
         state = run("goal", m)
         self.assertEqual(state["status"], "finished")
         self.assertEqual(len(m.efforts("reviewer")), 1)                       # only for the second answer
-        feedback = [t["content"] for t in state["turns"] if t["content"].startswith("FEEDBACK")]
-        self.assertIn("99.12", feedback[0])
+        self.assertIn("99.12", executor_prompts(m)[-1][-1]["content"])
         self.assertTrue(any(e["kind"] == "review" and e.get("check") == "citations" for e in read_log(state)))
 
     def test_rounding_dates_periods_and_the_users_numbers_are_fine(self):
@@ -286,9 +311,23 @@ class ReviewerSeesCitedOutputs(LoopCase):
         self.assertIn("Bank59,2026Q3,operational", reviewer)
         self.assertIn('input: {"path": "work/rwa.csv"}', reviewer)   # what produced it
 
+    def test_tables_listed_with_the_answer_are_given_to_the_reviewer(self):
+        m = model([tool_call("run_python", code="result = 1", save_as="by_division"),
+                   j(final="See the grid below.", tables=["by_division"])])
+
+        def save(e):
+            config.work_dir(state["run_id"]).mkdir(parents=True, exist_ok=True)
+            (config.work_dir(state["run_id"]) / "by_division.csv").write_text("division,rwa\nMarkets,66363\n")
+            return True
+        state = new_state("g")
+        run("g", m, state=state, approve=save)
+        prompt = [c for c in m.calls if c["purpose"] == "reviewer"][0]["messages"][-1]["content"]
+        self.assertIn("shown to the user under the answer", prompt)
+        self.assertIn("Markets,66363", prompt)
+
 
 class Finisher(LoopCase):
-    STUCK = tool_call("read_file", path="work/sample_capital.csv")        # step_done false, repeated
+    STUCK = tool_call("read_file", path="work/sample_capital.csv")        # repeated
 
     def _model(self, finisher):
         return FakeModel({"planner": [j(plan=["Read the file"])], "executor": [self.STUCK] * 3,
@@ -309,11 +348,6 @@ class Finisher(LoopCase):
         self.assertEqual(state["status"], "aborted")
         self.assertIn("Repeated", state["events"][-1]["payload"]["reason"])
 
-    def test_not_used_while_plan_steps_remain(self):
-        m = model([READ, READ, READ])                                  # 3-step plan, step 2 not done
-        run("goal", m)
-        self.assertEqual(m.efforts("finisher"), [])
-
 
 class StopDuringModelCall(LoopCase):
     """Stop is clicked in the UI while a slow model call is still running (same state dict)."""
@@ -325,15 +359,16 @@ class StopDuringModelCall(LoopCase):
                 raise reply_or_error
             return reply_or_error
         state = new_state("goal")
-        state["status"], state["plan"] = "running", ["read"]
-        run_one_step(state, FakeModel({"executor": [reply]}))
+        m = FakeModel({"planner": [PLAN], "executor": [reply]})
+        run_one_step(state, m)                             # plan
+        run_one_step(state, m)
         return state
 
     def test_reply_after_stop_is_not_acted_on(self):
         state = self._stopped_while_calling(READ)
         self.assertEqual(state["status"], "aborted")
-        self.assertNotIn("tool", [e["kind"] for e in read_log(state)])
-        self.assertEqual(state["step_count"], 0)
+        self.assertEqual(state["events"][-1]["kind"], "abort")
+        self.assertNotIn("tool", [e["kind"] for e in state["events"]])
 
     def test_cancelled_call_does_not_undo_the_stop(self):
         state = self._stopped_while_calling(ConnectionError("cancelled"))
@@ -342,26 +377,30 @@ class StopDuringModelCall(LoopCase):
 
 
 class Memory(LoopCase):
-    def test_old_turns_are_summarised(self):
-        old = config.RECENT_TURNS
-        config.RECENT_TURNS = 2
+    def test_long_conversations_are_summarised(self):
+        old = config.PROMPT_BUDGET_TOKENS, config.RECENT_TURNS
+        config.PROMPT_BUDGET_TOKENS, config.RECENT_TURNS = 200, 2
         try:
             calcs = [tool_call("recall", query=f"term {i}") for i in range(5)]
             m = model(calcs + [final()], summariser=["- earlier calcs done"] * 5)
             state = run("goal", m)
         finally:
-            config.RECENT_TURNS = old
+            config.PROMPT_BUDGET_TOKENS, config.RECENT_TURNS = old
         self.assertEqual(state["status"], "finished")
-        self.assertTrue(m.efforts("summariser"))
         self.assertEqual(set(m.efforts("summariser")), {"none"})
-        self.assertIn("earlier calcs", state["summary"])
-        self.assertLessEqual(len(state["turns"]), 2 * 2 + 2)
+        self.assertIn("earlier calcs done", json.dumps(executor_prompts(m)[-1]))
 
-    def test_prompt_contains_rendered_tools(self):
-        state = new_state("goal")
-        msgs = build_messages(state)
-        self.assertIn("run_python", msgs[0]["content"])
-        self.assertNotIn("{{tools}}", msgs[0]["content"])
+    def test_follow_up_keeps_the_conversation(self):
+        from agent.loop import continue_with
+        m = model([READ, final("CET1 is 12850 [ref: read_file-1]"), final("Still 12850 [ref: read_file-1]")],
+                  planner=(PLAN, PLAN), reviewer=(OK, OK))
+        state = run("goal", m)
+        continue_with(state, "and again?")
+        run("", m, state=state)
+        self.assertEqual(state["status"], "finished")
+        last = executor_prompts(m)[-1]
+        self.assertIn("NEW INSTRUCTION: and again?", last[-1]["content"])
+        self.assertTrue(any("OBSERVATION" in x["content"] for x in last))        # earlier results still there
 
 
 class Demo(LoopCase):
@@ -369,23 +408,6 @@ class Demo(LoopCase):
         state = run("demo", DemoFakeModel(), inputs=["inputs/sample_capital.csv"], approve=lambda e: True)
         self.assertEqual(state["status"], "finished")
         self.assertIn("12.66%", state["final"])
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
-class ReviewerSeesShownTables(LoopCase):
-    def test_tables_listed_with_the_answer_are_given_to_the_reviewer(self):
-        from agent.loop import review
-        state = new_state("g")
-        config.work_dir(state["run_id"]).mkdir(parents=True, exist_ok=True)
-        (config.work_dir(state["run_id"]) / "by_division.csv").write_text("division,rwa\nMarkets,66363\n")
-        m = FakeModel({"reviewer": [OK]})
-        review(state, m, "See the grid below [ref: x-1].", tables=[f"work/{state['run_id']}/by_division.csv"])
-        prompt = m.calls[0]["messages"][-1]["content"]
-        self.assertIn("shown to the user under the answer", prompt)
-        self.assertIn("Markets,66363", prompt)
 
 
 class CsvEvidence(LoopCase):
@@ -399,3 +421,7 @@ class CsvEvidence(LoopCase):
                                              "Amounts below thresholds (250% RW),1,857\n")
         self.assertEqual(uncited_numbers(state, "Credit 148,898 and thresholds 857 [ref: sql_query-1]"), [])
         self.assertEqual(uncited_numbers(state, "Credit 148,899 [ref: sql_query-1]"), ["148,899"])
+
+
+if __name__ == "__main__":
+    unittest.main()

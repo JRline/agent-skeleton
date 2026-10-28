@@ -6,7 +6,8 @@ from pathlib import Path
 
 from agent import config
 from agent.backends.fake import FakeModel
-from agent.loop import _Plan, plan
+from agent.graph import plan
+from agent.checks import _Plan
 from agent.memory import new_state
 from agent.plugins import TOOLKITS, examples, load
 from agent.skills import get_skill

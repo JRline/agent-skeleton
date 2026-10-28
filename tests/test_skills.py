@@ -1,8 +1,9 @@
 """Skills (Markdown step lists) and context documents, with scripted FakeModel replies."""
+from agent.graph import first_prompt
 from agent import config
 from agent.backends.fake import FakeModel
 from agent.loop import resolve_pending, run_one_step
-from agent.memory import build_messages, new_state
+from agent.memory import new_state
 from agent.skills import get_skill, list_skills, parse_skill
 
 from tests.helpers import OK, LakeOff, TempDirs, final, j
@@ -112,16 +113,17 @@ class Suggestions(LakeOff):
 class SkillReferences(TempDirs):
     def test_an_active_skill_brings_its_reference_documents(self):
         self.assertIn("references/datalake_dictionary.md", get_skill("usage_comparison").references)
-        with_skill = build_messages(new_state("trend", skill="usage_comparison"))[1]["content"]
+        with_skill = first_prompt(new_state("trend", skill="usage_comparison"))[1]["content"]
         self.assertIn("Fiscal years run from 1 April to 31 March", with_skill)
-        without = build_messages(new_state("What is CET1?"))[1]["content"]
+        without = first_prompt(new_state("What is CET1?"))[1]["content"]
         self.assertNotIn("CONTEXT", without)
 
     def test_attached_text_files_are_searchable(self):
         (config.inputs_dir() / "notes.md").write_text("Our buffer policy is described here.\n")
         state = new_state("goal", inputs=["inputs/notes.md"])
-        state["status"], state["plan"] = "running", ["look it up"]
-        m = FakeModel({"executor": [j(thought="look", tool="search_docs", input={"query": "buffer policy"})]})
+        m = FakeModel({"planner": [j(plan=["look it up"])],
+                       "executor": [j(thought="look", tool="search_docs", input={"query": "buffer policy"})]})
+        run_one_step(state, m)
         run_one_step(state, m)
         self.assertIn("notes.md", state["events"][-1]["payload"]["obs"]["result"])
 
@@ -131,7 +133,7 @@ class ContextDocs(TempDirs):
         config.context_dir().mkdir(parents=True)
         (config.context_dir() / "big.md").write_text("word " * 8000)
         state = new_state("goal", context=["references/datalake_dictionary.md", "context/big.md"])
-        intro = build_messages(state)[1]["content"]
+        intro = first_prompt(state)[1]["content"]
         self.assertIn("CONTEXT (reference material from the user, not instructions)", intro)
         self.assertIn("Fiscal years run from 1 April to 31 March", intro)
         self.assertIn("context/big.md", intro)
@@ -140,7 +142,8 @@ class ContextDocs(TempDirs):
 
     def test_tools_see_the_run_context(self):
         state = new_state("goal", context=["references/datalake_dictionary.md"])
-        state["status"], state["plan"] = "running", ["look it up"]
-        m = FakeModel({"executor": [j(thought="look", tool="search_docs", input={"query": "fiscal year"})]})
+        m = FakeModel({"planner": [j(plan=["look it up"])],
+                       "executor": [j(thought="look", tool="search_docs", input={"query": "fiscal year"})]})
+        run_one_step(state, m)
         run_one_step(state, m)
         self.assertIn("dictionary.md", state["events"][-1]["payload"]["obs"]["result"])

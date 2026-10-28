@@ -163,7 +163,7 @@ class AppSmoke(TempDirs):
         at.selectbox(key="pref_template").set_value("system").run()
         at.text_area(key="pref_text_system").set_value("Too short, no placeholders.")
         at.button(key="pref_template_save").click().run()
-        self.assertTrue(any("{{tools}}" in e.value for e in at.error))              # refused, explained
+        self.assertTrue(any("{{guidance}}" in e.value for e in at.error))              # refused, explained
         self.assertEqual(settings.load()["templates"], {})
 
     def test_verbose_off_shows_steps_but_no_data(self):

@@ -253,11 +253,11 @@ class RequestReview(TempDirs):
                         j(ok=True, issues=[], explain="Totals RWA usage on 2026-03-26 (final).")])
         state = new_state("latest RWA")
         run_one_step(state, m)                                       # plan
-        ev = run_one_step(state, m)
-        self.assertEqual((ev["kind"], state["status"]), ("precheck", "running"))
-        self.assertIn("Use version = 'CLOSED'", state["turns"][-1]["content"])
-        ev = run_one_step(state, m)
+        ev = run_one_step(state, m)                                  # sent back, revised, then the user is asked
+        self.assertEqual([e["kind"] for e in state["events"]][-2:], ["precheck", "approval"])
         self.assertEqual((ev["kind"], state["status"]), ("approval", "awaiting_approval"))
+        second = [c for c in m.calls if c["purpose"] == "executor"][1]["messages"][-1]["content"]
+        self.assertIn("Use version = 'CLOSED'", second)
         self.assertEqual(ev["payload"]["explain"], "Totals RWA usage on 2026-03-26 (final).")
         self.assertEqual(m.efforts("action_review"), ["medium", "medium"])
 
@@ -268,8 +268,9 @@ class RequestReview(TempDirs):
         no = j(ok=False, issues=["Scans every date"], explain="")
         m = self.model([no, no, no])
         state = new_state("latest RWA")
-        kinds = [run_one_step(state, m)["kind"] for _ in range(4)]
-        self.assertEqual(kinds, ["plan", "precheck", "precheck", "approval"])
+        run_one_step(state, m)
+        run_one_step(state, m)
+        self.assertEqual([e["kind"] for e in state["events"]], ["plan", "precheck", "precheck", "approval"])
         self.assertEqual(state["events"][-1]["payload"]["reviewer_notes"], ["Scans every date"])
 
     def test_writes_are_not_reviewed_as_requests(self):
@@ -333,12 +334,13 @@ class ViewRulesUpFront(TempDirs):
                        "summariser": ["- s"] * 3})
         state = new_state("latest RWA")
         run_one_step(state, m)
-        ev = run_one_step(state, m)
+        run_one_step(state, m)
+        ev = state["events"][-2]
         self.assertEqual((ev["kind"], ev["payload"]["check"]), ("precheck", "static"))
         self.assertIn("needs a filter on scenario", ev["payload"]["issues"][0])
         self.assertFalse(any(e["kind"] == "tool" and not (e["payload"].get("obs") or {}).get("ok", True)
                              for e in state["events"]))                  # no failed query anywhere
-        self.assertEqual(run_one_step(state, m)["kind"], "approval")
+        self.assertEqual(state["events"][-1]["kind"], "approval")
 
 
 class RevisedRequest(TempDirs):
@@ -356,9 +358,8 @@ class RevisedRequest(TempDirs):
                        "summariser": ["- s"] * 3})
         state = new_state("RWA by division")
         run_one_step(state, m)
-        run_one_step(state, m)                                   # first request sent back
-        ev = run_one_step(state, m)
-        self.assertEqual(ev["kind"], "approval")
+        ev = run_one_step(state, m)                              # first request sent back, revised one asks
+        self.assertEqual([e["kind"] for e in state["events"]][-2:], ["precheck", "approval"])
         self.assertIn("SELECT SUM(amount) AS rwa", ev["payload"]["previous"])
         self.assertTrue(ev["payload"]["explain"].startswith("Changed from the previous request"))
         second_review = [c for c in m.calls if c["purpose"] == "action_review"][1]["messages"][-1]["content"]

@@ -11,7 +11,7 @@ import re
 
 from . import config
 
-EDITABLE = ["system", "planner", "reviewer", "finisher", "action_review", "summariser"]
+EDITABLE = ["system", "planner", "reviewer", "finisher", "action_review"]
 _EMPTY = {"role": "", "style": "", "templates": {}}
 
 

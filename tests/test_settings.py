@@ -1,6 +1,7 @@
 """Prompt settings: role, answer style and template overrides, with placeholder validation."""
+from agent.graph import first_prompt
 from agent import settings
-from agent.memory import build_messages, load_prompt, new_state
+from agent.memory import load_prompt, new_state
 
 from tests.helpers import TempDirs
 
@@ -8,12 +9,12 @@ from tests.helpers import TempDirs
 class PromptSettings(TempDirs):
     def test_defaults_when_nothing_is_saved(self):
         self.assertEqual(settings.load(), {"role": "", "style": "", "templates": {}})
-        self.assertIn("Reply protocol", load_prompt("system", tools="T", guidance="G"))
+        self.assertIn("## Toolkit rules\nG", load_prompt("system", guidance="G"))
 
     def test_role_and_style_shape_the_system_prompt(self):
         settings.save_role_style("You are a regulatory capital analyst.",
                                  "Answer in English, concise, amounts in JPY bn.")
-        system = build_messages(new_state("hi"))[0]["content"]
+        system = first_prompt(new_state("hi"))[0]["content"]
         self.assertTrue(system.startswith("ROLE: You are a regulatory capital analyst"))
         self.assertIn("ANSWER STYLE: Answer in English, concise, amounts in JPY bn.", system)
         self.assertIn("ANSWER STYLE", load_prompt("finisher", goal="g", facts="f"))
@@ -37,7 +38,7 @@ class PromptSettings(TempDirs):
 
     def test_override_missing_a_placeholder_is_refused(self):
         problem = settings.save_template("system", "Be nice. No tools here.")
-        self.assertIn("{{tools}}", problem)
+        self.assertIn("{{guidance}}", problem)
         self.assertEqual(settings.load()["templates"], {})
 
     def test_unknown_template_is_refused(self):

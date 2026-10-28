@@ -5,7 +5,8 @@ from agent import config
 from agent.adapter import ModuleChatModel
 from agent.backends import session_sim
 from agent.loop import run_one_step
-from agent.memory import add_turn, build_messages, new_state, read_log
+from agent.graph import first_prompt
+from agent.memory import new_state, read_log
 from agent.session import Session
 
 from tests import sim_inner_fake
@@ -62,7 +63,7 @@ class SessionMode(TempDirs):
         self.assertIn("## Reply protocol", first["text"])
         self.assertIn("NEW CONVERSATION", first["text"])
         self.assertNotIn("## Reply protocol", second["text"])          # sent once
-        for part in ("OBSERVATION", "REMINDER: reply with exactly one JSON object", "list_datasets", "STATE"):
+        for part in ("OBSERVATION", "REMINDER: reply with exactly one JSON object", "list_datasets"):
             self.assertIn(part, second["text"])
         self.assertLess(len(second["text"]), len(first["text"]) / 2)
 
@@ -78,38 +79,36 @@ class SessionMode(TempDirs):
 
     def test_a_changed_block_is_sent_alone(self):
         session, state = Session(), new_state("g", toolkits=["files"])
-        session.prepare(build_messages(state), "executor", state["run_id"])
-        add_turn(state, "assistant", '{"tool": "read_file"}')
-        add_turn(state, "user", "OBSERVATION: {}")
+        session.prepare(first_prompt(state), "executor", state["run_id"])
+        turns = [{"role": "assistant", "content": '{"tool": "read_file"}'},
+                 {"role": "user", "content": "OBSERVATION: {}"}]
         state["toolkits"].append("analysis")                     # the user enabled a toolkit
-        text, sent = session.prepare(build_messages(state), "executor", state["run_id"])
+        text, sent = session.prepare(first_prompt(state) + turns, "executor", state["run_id"])
         self.assertEqual(sent["mode"], "delta")
         self.assertIn("UPDATE (## Tools)", text)
         self.assertIn("run_python", text)
         self.assertNotIn("UPDATE (## Reply protocol)", text)
+        self.assertIn("OBSERVATION: {}", text)
         self.assertNotIn('{"tool": "read_file"}', text)           # its own reply is already in its memory
 
     def test_full_send_on_new_conversation_resync_retry_and_refresh(self):
         session, a, b = Session(), new_state("first"), new_state("second")
-        self.assertEqual(session.prepare(build_messages(a), "executor", a["run_id"])[1]["mode"], "full")
-        add_turn(a, "user", "OBSERVATION: {}")
-        self.assertEqual(session.prepare(build_messages(a), "executor", a["run_id"])[1]["mode"], "delta")
-        self.assertEqual(session.prepare(build_messages(b), "executor", b["run_id"])[1]["mode"], "full")
+        obs = {"role": "user", "content": "OBSERVATION: {}"}
+        mode = lambda st, turns: session.prepare(first_prompt(st) + turns, "executor", st["run_id"])[1]["mode"]  # noqa: E731
+        self.assertEqual(mode(a, []), "full")
+        self.assertEqual(mode(a, [obs]), "delta")
+        self.assertEqual(mode(b, []), "full")                     # another conversation
         session.resync("executor")
-        self.assertEqual(session.prepare(build_messages(b), "executor", b["run_id"])[1]["mode"], "full")
-        add_turn(b, "user", "x")
-        session.prepare(build_messages(b), "executor", b["run_id"])
-        b["turns"].pop()                                          # a retried step: fewer turns than were sent
-        self.assertEqual(session.prepare(build_messages(b), "executor", b["run_id"])[1]["mode"], "full")
+        self.assertEqual(mode(b, []), "full")
+        mode(b, [obs])
+        self.assertEqual(mode(b, []), "full")                     # a retried step: fewer turns than were sent
         config.MEMORY_REFRESH_TOKENS = 1                          # compressed memory: refresh soon
-        add_turn(b, "user", "y")
-        session.prepare(build_messages(b), "executor", b["run_id"])
-        add_turn(b, "user", "z")
-        self.assertEqual(session.prepare(build_messages(b), "executor", b["run_id"])[1]["mode"], "full")
+        mode(b, [obs])
+        self.assertEqual(mode(b, [obs, obs]), "full")
 
     def test_a_repair_sends_only_the_correction(self):
         session, state = Session(), new_state("g")
-        msgs = build_messages(state)
+        msgs = first_prompt(state)
         session.prepare(msgs, "executor", state["run_id"])
         repair = msgs + [{"role": "assistant", "content": "oops"},
                          {"role": "user", "content": "Invalid output: no JSON. Reply with one JSON object."}]
@@ -120,10 +119,10 @@ class SessionMode(TempDirs):
         backend = Backend({"executor": []})
         model = ModuleChatModel(backend, "prod")
         state = new_state("g")
-        model.session.prepare(build_messages(state), "executor", state["run_id"])
+        model.session.prepare(first_prompt(state), "executor", state["run_id"])
         model.new_session()
         self.assertEqual(backend.sessions, 1)
-        self.assertEqual(model.session.prepare(build_messages(state), "executor", state["run_id"])[1]["mode"], "full")
+        self.assertEqual(model.session.prepare(first_prompt(state), "executor", state["run_id"])[1]["mode"], "full")
 
     def test_off_by_default_and_needs_a_channel_aware_backend(self):
         stateless = StatelessBackend()

@@ -4,7 +4,7 @@ from agent.backends.fake import FakeModel
 from agent.loop import continue_with, rename, run, run_one_step
 from agent.memory import list_conversations, load_state, new_state
 
-from tests.helpers import OK, TempDirs, final, j, tool_call
+from tests.helpers import PLAN, OK, TempDirs, final, j, tool_call
 
 READ = tool_call("read_file", step_done=True, path="inputs/sample_capital.csv")
 
@@ -46,8 +46,7 @@ class Continue(TempDirs):
         state = new_state("goal")
         state["status"], state["step_count"] = "finished", config.MAX_STEPS
         continue_with(state, "next")
-        state["status"], state["plan"] = "running", ["answer"]
-        run_one_step(state, FakeModel({"executor": [final("ok")], "reviewer": [OK]}))
+        run("", FakeModel({"planner": [PLAN], "executor": [final("ok")], "reviewer": [OK]}), state=state)
         self.assertEqual(state["status"], "finished")
 
     def test_attachments_accumulate(self):

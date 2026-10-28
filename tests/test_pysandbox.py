@@ -156,26 +156,29 @@ class Run(TempDirs):
 class InTheLoop(TempDirs):
     def running(self, code):
         state = new_state("analyse")
-        state["status"], state["plan"] = "running", ["analyse"]
         action = j(thought="analyse", tool="run_python",
                    input={"code": code, "tables": {"cap": "inputs/sample_capital.csv"}, "save_as": "ratios"})
-        return state, FakeModel({"executor": [action]})
+        m = FakeModel({"planner": [j(plan=["analyse"])], "executor": [action, j(final="Stopped.")],
+                       "reviewer": [j(ok=True, issues=[])]})
+        run_one_step(state, m)                                       # plan
+        return state, m
 
     def test_rejected_code_never_reaches_approval(self):
         state, m = self.running("import os\nresult = 1")
         run_one_step(state, m)
-        self.assertEqual(state["status"], "running")
-        ev = state["events"][-1]
-        self.assertEqual(ev["kind"], "precheck")                    # sent back before the user is asked
+        self.assertNotIn("approval", [e["kind"] for e in state["events"]])
+        ev = [e for e in state["events"] if e["kind"] == "precheck"][0]   # sent back before the user is asked
         self.assertIn("import", ev["payload"]["issues"][0])
-        self.assertIn("not sent; fix it first", state["turns"][-1]["content"])
+        retry = [c for c in m.calls if c["purpose"] == "executor"][1]["messages"][-1]["content"]
+        self.assertIn("not sent; fix it first", retry)
 
     def test_good_code_waits_for_approval_then_runs(self):
         state, m = self.running(GOOD)
         run_one_step(state, m)
         self.assertEqual(state["status"], "awaiting_approval")
         self.assertIn("cet1_ratio_pct", state["pending"]["input"]["code"])
-        resolve_pending(state, approved=True)
-        result = json.loads(state["turns"][-1]["content"].split("OBSERVATION: ", 1)[1])["result"]
+        ev = resolve_pending(state, approved=True)                     # runs at once
+        self.assertEqual((ev["kind"], ev["payload"]["approved"]), ("user", True))
+        result = ev["payload"]["obs"]["result"]
         self.assertIn('"type": "table"', result)
         self.assertIn("work/", result)

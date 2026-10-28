@@ -1,4 +1,4 @@
-"""Working state, persistence, logging and prompt building (docs/design.md §7, §13)."""
+"""The conversation record (state.json), persistence, logging and prompt helpers (docs/design.md §7, §13)."""
 from __future__ import annotations
 
 import json
@@ -52,26 +52,16 @@ def new_state(goal: str, inputs: list[str] | None = None, context: list[str] | N
         "skill": skill,            # forced by the user (/skill or the sidebar), or a suggestion they accepted
         # toolkits this run may use: the session's selection (basic by default) + accepted suggestions
         "toolkits": list(toolkits) if toolkits is not None else basic_toolkits(),
-        "suggested": False,        # the planner may suggest extra toolkits/a skill once per run
+        "suggested": False,        # the planner may suggest extra toolkits/a skill once per instruction
         "plan": [],
-        "step": 0,                 # index of the current plan step
-        "step_count": 0,           # executor actions taken
-        "done": [],                # short records of completed actions
-        "facts": [],               # durable facts with refs
-        "open_questions": [],
-        "summary": "",             # rolling summary of dropped turns
-        "turns": [],               # recent assistant/user messages, verbatim
-        "pending": None,           # action waiting for approval or a user answer
+        "step_count": 0,           # tool steps taken (the step limit is per instruction)
+        "facts": [],               # tool results with refs, for the reviewers and the finisher
+        "pending": None,           # approval, question or suggestion waiting for the user (with its interrupt id)
         "final": None,
         "warnings": [],
-        "last_error": None,
-        "repeat_flag": False,
-        "repeats": 0,
-        "consecutive_errors": 0,
         "review_rounds": 0,
-        "last_signature": None,
-        "ref_counter": 0,
         "results": [],             # result tables shown with answers: {task, goal, path, title}
+        "start": True,             # the next step starts the graph with this instruction
         "events": [],              # UI/CLI trace, also saved for resume
     }
     run_dir(state).mkdir(parents=True, exist_ok=True)
@@ -143,7 +133,7 @@ def list_runs() -> list[str]:
 def log(state: dict, kind: str, **fields) -> None:
     """One line per model call, tool call, review or user action in runs/<id>/log.jsonl."""
     entry = {"ts": datetime.now().isoformat(timespec="milliseconds"),
-             "step": state["step_count"], "kind": kind, **fields}
+             "step": state.get("step_count"), "kind": kind, **fields}
     d = run_dir(state)
     d.mkdir(parents=True, exist_ok=True)
     with open(d / "log.jsonl", "a") as f:
@@ -157,98 +147,11 @@ def read_log(state_or_id) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-class ModelCallError(RuntimeError):
-    """The backend failed (after its own retries), e.g. Ollama not running. Distinct from a bad reply."""
-
-
-def call_model(state: dict, model, messages: list[dict], purpose: str, effort: str,
-               stop: list[str] | None = None) -> str:
-    """Every model call goes through here so effort and latency are always logged."""
-    t0 = time.perf_counter()
-    error = None
-    out = ""
-    if hasattr(model, "last_send"):
-        model.last_send = None
-    try:
-        out = model.complete(messages, effort=effort, stop=stop, purpose=purpose, conversation=state.get("run_id"))
-        return out
-    except Exception as e:
-        error = f"{type(e).__name__}: {e}"
-        raise ModelCallError(error) from e
-    finally:
-        model_id = getattr(model, "model_id", None)
-        sent = getattr(model, "last_send", None) or {}   # session mode: channel, full/delta, tokens actually sent
-        log(state, "model", purpose=purpose, effort=sent.get("effort", effort), backend=getattr(model, "name", "?"),
-            model=model_id(effort) if callable(model_id) else None, prompt_tokens=estimate_tokens(messages),
-            latency_ms=round((time.perf_counter() - t0) * 1000), output=out[:2000], error=error,
-            **({"channel": sent["channel"], "send": sent["mode"], "sent_tokens": sent["sent_tokens"]} if sent else {}))
-
-
-def next_ref(state: dict, tool_name: str) -> str:
-    state["ref_counter"] += 1
-    return f"{tool_name}-{state['ref_counter']}"
-
-
 # ---------------------------------------------------------------- updates
-
-def add_turn(state: dict, role: str, content: str) -> None:
-    state["turns"].append({"role": role, "content": content})
-
-
-def add_feedback(state: dict, text: str) -> None:
-    add_turn(state, "user", f"FEEDBACK: {text}")
-
 
 def add_fact(state: dict, fact: str) -> None:
     state["facts"].append(fact)
     del state["facts"][:-config.MAX_FACTS]
-
-
-# ---------------------------------------------------------------- prompt building
-
-def render_state(state: dict) -> str:
-    plan_lines = [
-        f"  {'[x]' if i < state['step'] else '[>]' if i == state['step'] else '[ ]'} {i + 1}. {s}"
-        for i, s in enumerate(state["plan"])
-    ]
-    current = state["plan"][state["step"]] if state["step"] < len(state["plan"]) else \
-        "All plan steps are done: return the final answer."
-    parts = [
-        "STATE",
-        f"Goal: {state['goal']}",
-        "Plan:\n" + ("\n".join(plan_lines) or "  (none)"),
-        f"Current step: {current}",
-        "Facts:\n" + ("\n".join(f"  - {f}" for f in state["facts"]) or "  (none yet)"),
-    ]
-    if state["summary"]:
-        parts.append("Summary of earlier turns:\n" + state["summary"])
-    if state["open_questions"]:
-        parts.append("Open questions:\n" + "\n".join(f"  - {q}" for q in state["open_questions"]))
-    parts.append(f"Steps used: {state['step_count'] - state.get('task_start', 0)} of {config.MAX_STEPS}")
-    parts.append("Reply with one JSON object.")
-    return "\n".join(parts)
-
-
-def summarise_old_turns(state: dict, model, system_tokens: int) -> None:
-    """Fold the oldest turns into state['summary'] when over the turn cap or token budget."""
-    def over() -> bool:
-        tokens = system_tokens + estimate_tokens(state["turns"]) + len(render_state(state)) // 4
-        return len(state["turns"]) > 2 * config.RECENT_TURNS or tokens > config.PROMPT_BUDGET_TOKENS
-
-    if not over() or len(state["turns"]) <= 2:
-        return
-    cut = max(2, len(state["turns"]) - 2 * config.RECENT_TURNS)
-    cut += cut % 2                      # keep assistant/user pairs together
-    cut = min(cut, len(state["turns"]) - 2)
-    old, state["turns"] = state["turns"][:cut], state["turns"][cut:]
-    turns_text = "\n".join(f"{t['role'].upper()}: {t['content'][:600]}" for t in old)
-    prompt = load_prompt("summariser", summary=state["summary"] or "(none)", turns=turns_text)
-    try:
-        summary = call_model(state, model, [{"role": "user", "content": prompt}],
-                             "summariser", config.EFFORT["summariser"])
-    except Exception:
-        summary = state["summary"] + f"\n- {len(old)} earlier turns dropped (summariser failed)."
-    state["summary"] = summary.strip()[-1500:]
 
 
 def toolkit_guidance(toolkits) -> str:
@@ -293,33 +196,3 @@ def context_block(state: dict) -> str:
     if listed:
         parts.append("Larger documents, search them with search_docs: " + "; ".join(listed))
     return "\n".join(parts)
-
-
-def build_messages(state: dict, model=None) -> list[dict]:
-    """System protocol (+ active skill) + goal + context + recent turns + STATE last
-    (where small models pay attention)."""
-    toolkits = state.get("toolkits", basic_toolkits())
-    content = load_prompt("system", tools=render_tools(enabled_tools(toolkits)), guidance=toolkit_guidance(toolkits))
-    skill = get_skill(state.get("skill"))
-    if skill:
-        content += "\n\n" + render_skill(skill)
-    system = {"role": "system", "content": content}
-    if model is not None and not getattr(model, "remembers", False):   # a backend with memory keeps the history
-        summarise_old_turns(state, model, estimate_tokens([system]))
-    intro = f"GOAL: {state['goal']}"
-    if state.get("tasks"):
-        intro += ("\nEARLIER IN THIS CONVERSATION (their tool results and facts are below and still valid):\n"
-                  + earlier_tasks(state))
-    if state["inputs"]:
-        intro += "\nINPUT FILES: " + quote_paths(state["inputs"])
-    block = context_block(state)
-    if block:
-        intro += "\n\n" + block
-    messages = [system, {"role": "user", "content": intro}]
-    messages += [dict(t) for t in state["turns"]]
-    state_block = render_state(state)
-    if messages[-1]["role"] == "user":
-        messages[-1] = {"role": "user", "content": messages[-1]["content"] + "\n\n" + state_block}
-    else:
-        messages.append({"role": "user", "content": state_block})
-    return messages

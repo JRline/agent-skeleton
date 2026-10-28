@@ -3,13 +3,14 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from agent.graph import first_prompt
 from agent import config, plugins
 from agent.backends.fake import FakeModel
 from agent.loop import resolve_pending, run_one_step
-from agent.memory import build_messages, new_state
+from agent.memory import new_state
 from agent.tools import TOOLS
 
-from tests.helpers import STD, LakeOff, TempDirs, j
+from tests.helpers import STD, LakeOff, TempDirs, j, first_step
 
 PLUGIN = '''
 from pydantic import BaseModel, Field
@@ -45,21 +46,20 @@ class Defaults(TempDirs):
 
 class Toolkits(LakeOff):
     def test_prompt_shows_only_enabled_tools_and_their_guidance(self):
-        system = build_messages(new_state("hi"))[0]["content"]
+        system = first_prompt(new_state("hi"))[0]["content"]
         self.assertIn("read_file", system)
         self.assertIn("ask_user", system)
         self.assertNotIn("sql_query", system)
         self.assertNotIn("describe_dataset once per view", system)
-        system = build_messages(new_state("hi", toolkits=["datalake"]))[0]["content"]
+        system = first_prompt(new_state("hi", toolkits=["datalake"]))[0]["content"]
         self.assertIn("sql_query", system)
         self.assertIn("describe_dataset once per view", system)
 
     def test_a_tool_that_does_not_exist_is_repaired_and_disabled_ones_are_not_listed(self):
         state = new_state("goal")
-        state["status"], state["plan"] = "running", ["query"]
         m = FakeModel({"executor": [j(thought="q", tool="drop_tables", input={})] * 4})
-        run_one_step(state, m)
-        repair = m.calls[1]["messages"][-1]["content"]
+        first_step(state, m, plan=["query"])
+        repair = m.calls[2]["messages"][-1]["content"]
         self.assertIn("Unknown tool 'drop_tables'", repair)
         self.assertNotIn("sql_query", repair.split("Use one of:")[1])
 
@@ -71,16 +71,15 @@ class MidRunSuggestion(LakeOff):
 
     def running(self):
         state = new_state("CET1 for DemoBank")
-        state["status"], state["plan"] = "running", ["get the data"]
         return state
 
     def test_calling_a_tool_from_a_disabled_toolkit_asks_the_user(self):
         state = self.running()
         m = FakeModel({"executor": [self.SQL, self.SQL]})
-        ev = run_one_step(state, m)
+        ev = first_step(state, m, plan=["get the data"])
         self.assertEqual(state["status"], "awaiting_choice")
         self.assertEqual(ev["payload"]["toolkits"], ["datalake"])
-        self.assertEqual(len(m.calls), 1)                              # no wasted repair calls
+        self.assertEqual(len(m.calls), 2)                              # plan, then no wasted repair calls
         resolve_pending(state, choice={"toolkits": ["datalake"]})
         self.assertEqual(state["status"], "running")                   # continues, no re-plan
         run_one_step(state, m)
@@ -95,19 +94,19 @@ class MidRunSuggestion(LakeOff):
                 input={"code": "result = 1", "tables": {"raw": [["Common stock", 100]]}})
         good = j(thought="t", tool="run_python", input={"code": "result = 1"})
         m = FakeModel({"executor": [bad, good]})
-        ev = run_one_step(state, m)
+        ev = first_step(state, m)
         self.assertNotEqual(state["status"], "awaiting_choice")
         self.assertEqual(ev["kind"], "approval")                       # repaired in the same step
-        repair = m.calls[1]["messages"][-1]["content"]
+        repair = [c for c in m.calls if c["purpose"] == "executor"][1]["messages"][-1]["content"]
         self.assertIn("tables maps a name to a sandbox file path", repair)   # the model sees the real error
 
     def test_declined_toolkit_is_not_offered_again(self):
         state = self.running()
         m = FakeModel({"executor": [self.SQL, self.SQL, self.SQL, self.SQL, self.SQL]})
-        run_one_step(state, m)
+        first_step(state, m)
         resolve_pending(state, choice={})
-        self.assertIn("did not enable", state["turns"][-1]["content"])
         run_one_step(state, m)
+        self.assertIn("did not enable", [c for c in m.calls if c["purpose"] == "executor"][1]["messages"][-1]["content"])
         self.assertNotEqual(state["status"], "awaiting_choice")
 
     def test_file_tools_cannot_reach_lake_data(self):
@@ -116,7 +115,7 @@ class MidRunSuggestion(LakeOff):
         for path in ["datalake/usage_limits.csv", "../mock_lake/data/usage_limits.csv",
                      str(config.datalake_dir() / "usage_limits.csv")]:
             state = self.running()
-            run_one_step(state, FakeModel({"executor": [j(thought="r", tool="read_file", input={"path": path})]}))
+            first_step(state, FakeModel({"executor": [j(thought="r", tool="read_file", input={"path": path})]}))
             if state["status"] == "awaiting_approval":          # reading a file asks first; even approved, it fails
                 resolve_pending(state, approved=True)
             self.assertFalse(state["events"][-1]["payload"]["obs"]["ok"], path)
@@ -163,8 +162,7 @@ class UserPlugins(TempDirs):
         self.assertEqual(TOOLS["say_hello"].toolkit, "greeting")
         self.assertIn(("toolkit", "greeting"), {(i["kind"], i["name"]) for i in plugins.catalogue()})
         state = new_state("greet Ann", toolkits=["greeting"])
-        state["status"], state["plan"] = "running", ["greet"]
-        run_one_step(state, FakeModel({"executor": [j(thought="hi", tool="say_hello", input={"name": "Ann"})]}))
+        first_step(state, FakeModel({"executor": [j(thought="hi", tool="say_hello", input={"name": "Ann"})]}), plan=["greet"])
         self.assertEqual(state["events"][-1]["payload"]["obs"]["result"], "Hello, Ann!")
 
     def test_the_template_toolkit_works_when_copied(self):
@@ -174,8 +172,7 @@ class UserPlugins(TempDirs):
         try:
             self.assertEqual(plugins.ERRORS, [])
             state = new_state("convert", toolkits=["fx"])
-            state["status"], state["plan"] = "running", ["convert"]
-            run_one_step(state, FakeModel({"executor": [j(thought="c", tool="convert_amount",
+            first_step(state, FakeModel({"executor": [j(thought="c", tool="convert_amount",
                                                           input={"amount": 1000, "source": "USD", "target": "JPY"})]}))
             self.assertIn("151500.00 JPY", state["events"][-1]["payload"]["obs"]["result"])
         finally:

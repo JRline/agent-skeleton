@@ -80,3 +80,11 @@ def final(text="Done.") -> str:
 
 PLAN = j(plan=["Read the data", "Compute", "Answer"])
 OK = j(ok=True, issues=[])
+
+
+def first_step(state: dict, model, plan=("Do it",)) -> dict:
+    """Plan (a scripted planner reply) and take the first step: the graph always plans before it acts."""
+    from agent.loop import run_one_step
+    model.replies.setdefault("planner", []).insert(0, j(plan=list(plan)))
+    run_one_step(state, model)
+    return run_one_step(state, model)
