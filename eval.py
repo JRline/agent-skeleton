@@ -69,6 +69,7 @@ def run_task(task: dict, model) -> dict:
     """One golden task as a fresh conversation; returns checks, score and metrics."""
     saved = config.MAX_STEPS
     config.MAX_STEPS = task.get("max_steps", saved)
+    model.new_session()                  # session memory mode: each task starts with fresh instances
     t0 = time.perf_counter()
     try:
         state = run(task["instruction"], model, inputs=task.get("inputs", []),
@@ -101,6 +102,8 @@ def run_task(task: dict, model) -> dict:
         "score": round(sum(checks.values()) / len(checks), 3), "checks": checks,
         "steps": state["step_count"], "tool_calls": tool_calls, "model_calls": len(models),
         "model_seconds": round(sum(e.get("latency_ms", 0) for e in models) / 1000, 1),
+        "prompt_tokens": sum(e.get("prompt_tokens", 0) for e in models),
+        "sent_tokens": sum(e.get("sent_tokens", e.get("prompt_tokens", 0)) for e in models),
         "repairs": sum(1 for e in state["events"] if e["kind"] == "error")
         + sum(1 for e in state["events"] if e["kind"] == "tool" and e["payload"].get("attempts", 1) > 1),
         "review_rounds": state.get("review_rounds", 0), "seconds": round(seconds, 1),

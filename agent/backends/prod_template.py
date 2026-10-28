@@ -3,6 +3,11 @@
 The agent imports the module named by PROD_API_MODULE (default `existing_api_module`)
 and calls `call(text, effort)`. If your existing module has a different signature,
 write a 10-line wrapper like this one rather than changing the agent.
+
+Session memory mode (MODEL_MEMORY=session, docs/design.md §4a), only if each production instance keeps its own
+memory: add a `channel` parameter ("executor", "check" or "review"; send each to its own fixed instance, whose
+effort is config.CHANNEL_EFFORT[channel]) and a `new_session()` that starts fresh instances. See
+agent/backends/session_sim.py for the expected behaviour. Without `channel`, the agent stays stateless.
 """
 
 

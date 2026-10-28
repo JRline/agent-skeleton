@@ -167,17 +167,21 @@ def call_model(state: dict, model, messages: list[dict], purpose: str, effort: s
     t0 = time.perf_counter()
     error = None
     out = ""
+    if hasattr(model, "last_send"):
+        model.last_send = None
     try:
-        out = model.complete(messages, effort=effort, stop=stop, purpose=purpose)
+        out = model.complete(messages, effort=effort, stop=stop, purpose=purpose, conversation=state.get("run_id"))
         return out
     except Exception as e:
         error = f"{type(e).__name__}: {e}"
         raise ModelCallError(error) from e
     finally:
         model_id = getattr(model, "model_id", None)
-        log(state, "model", purpose=purpose, effort=effort, backend=getattr(model, "name", "?"),
-            model=model_id(effort) if callable(model_id) else None, prompt_tokens=estimate_tokens(messages), latency_ms=round((time.perf_counter() - t0) * 1000),
-            output=out[:2000], error=error)
+        sent = getattr(model, "last_send", None) or {}   # session mode: channel, full/delta, tokens actually sent
+        log(state, "model", purpose=purpose, effort=sent.get("effort", effort), backend=getattr(model, "name", "?"),
+            model=model_id(effort) if callable(model_id) else None, prompt_tokens=estimate_tokens(messages),
+            latency_ms=round((time.perf_counter() - t0) * 1000), output=out[:2000], error=error,
+            **({"channel": sent["channel"], "send": sent["mode"], "sent_tokens": sent["sent_tokens"]} if sent else {}))
 
 
 def next_ref(state: dict, tool_name: str) -> str:
@@ -300,7 +304,7 @@ def build_messages(state: dict, model=None) -> list[dict]:
     if skill:
         content += "\n\n" + render_skill(skill)
     system = {"role": "system", "content": content}
-    if model is not None:
+    if model is not None and not getattr(model, "remembers", False):   # a backend with memory keeps the history
         summarise_old_turns(state, model, estimate_tokens([system]))
     intro = f"GOAL: {state['goal']}"
     if state.get("tasks"):

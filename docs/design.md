@@ -149,8 +149,77 @@ own tools off, our system prompt, empty temp folder; effort none→low, medium�
 tests with a real model. Its prompts go to Anthropic, so synthetic data only. Backends may expose
 `model_name(effort)` (logged) and `cancel()` (used by Stop).
 
-Contract: the adapter is **stateless**. The caller passes the full message list on every call.
-If the module accepts role-tagged messages natively, pass them through instead of `_render`.
+Contract: the caller always builds and passes the full message list. With `MODEL_MEMORY=off` (the default)
+the adapter sends all of it on every call (**stateless**). If the module accepts role-tagged messages natively,
+pass them through instead of `_render`. With `MODEL_MEMORY=session`, see §4a.
+
+## 4a. Session memory mode (`session.py`, `MODEL_MEMORY=session`)
+
+**Why.** Every stateless call re-sends the whole prompt: about 6k tokens per executor call, of which about 54%
+(rules, tool list, toolkit rules, skill, the conversation's goal and files) is identical every time. When the
+transport is slow, that repeated text costs time.
+
+**Production constraints this is built for.**
+- The model is reached through a **fixed set of instances**, each with a **fixed effort** and its **own memory**
+  that persists between calls.
+- Fresh instances (empty memory) exist only when a **new agent session** starts; the same instances serve every
+  conversation in that session.
+- An instance's memory is **compressed automatically** when it grows (assumed; if the backend drops old messages
+  instead, the same refresh rules cover it). Compression can blur exact rules, so nothing may rely on old memory
+  for exact formats.
+
+**Channels: one instance per role, not per effort.** Splitting by effort alone would mix the reviewer with the
+planner and request check, and split the executor whenever it recovers at medium.
+
+| Channel | Effort | Serves | What each call sends |
+|---|---|---|---|
+| `executor` | none | executor actions and their repairs | fixed blocks once; then new turns + a one-line reminder + STATE |
+| `check` | medium | request review (`action_review`) | the whole self-contained prompt, under a "new request" header |
+| `review` | medium | planner, reviewer, finisher | the whole self-contained prompt, under a "new request" header |
+
+The mapping is `config.CHANNEL_OF` / `config.CHANNEL_EFFORT`. The executor stays on `none` even when the stateless
+policy would raise it to `medium` for recovery: its history lives in one instance.
+
+**What the executor channel sends.** `session.Session.prepare()` takes the full message list the agent built and
+compares it with what the channel already holds (a fingerprint per fixed block, the conversation id, the number
+of turns sent):
+- **Fixed blocks** — the reply protocol, the tool list, the toolkit rules, the active skill (each `## ` section of
+  the system prompt) and the conversation header (goal, input files) — are sent once; a block that changes (a
+  toolkit enabled, a skill accepted, a follow-up goal) is sent again alone as `UPDATE (<block>)`.
+- **New turns** since the last call (observations, feedback). The model's own replies are not repeated: its
+  memory has them.
+- **A reminder line** with the exact reply format and the enabled tool names, and the **STATE block** (plan,
+  current step, facts) on every call. These keep each call correct even if older memory has been compressed.
+- **A repair** sends only the correction: the instance already holds its bad reply.
+
+**Full send** (every fixed block, a `NEW CONVERSATION <id>` header, the recent turns and STATE) when:
+the channel has not seen this conversation yet; the agent's state has fewer turns than were sent (a step was
+undone and retried); `resync()` was called (after a failed model call, a protocol error, or a request with a
+missing required filter, i.e. when the memory may not match the saved state or the rules may have faded); or more
+than `MEMORY_REFRESH_TOKENS` have been sent since the last full send (periodic refresh against compression).
+
+**Other effects.** The summariser does not run (`ChatModel.remembers`): the backend holds the history, and STATE
+carries the plan and facts. Each model log line records `channel`, `send` (full / delta / repair) and
+`sent_tokens` next to the full prompt's `prompt_tokens`, so the full prompt of any call can still be rebuilt.
+
+**Backend contract.** Session mode switches on only if `MODEL_MEMORY=session` **and** the module's `call()`
+accepts `channel`: `call(text, effort, channel)`. An optional `new_session()` starts fresh instances; the UI's
+End session, each CLI run and each eval task start a new agent session. Modules without `channel` keep working
+statelessly, so every existing backend and test is unchanged.
+
+**Production stand-in** (`agent/backends/session_sim.py`). Behaves like the production stack — fixed instances per
+channel with fixed effort, memory kept between calls, fresh only on `new_session()`, oldest half compressed into
+notes past `SIM_MEMORY_TOKENS` — and answers through an inner backend (Claude Haiku via `claude_cli` by default).
+It re-sends each channel's memory to the inner model, so it does not save IO itself; it tests the agent's side.
+
+    LLM_BACKEND=prod PROD_API_MODULE=agent.backends.session_sim MODEL_MEMORY=session python eval.py --backend prod
+
+**Measured on the stand-in (one run, 2026-10-26).** Executor calls after the first sent 0.5–1.8k tokens instead
+of 5.8–9.5k (about 85–90% less); no summariser calls. The `check` and `review` channels still send their full
+prompts (3.6–7.3k tokens); sending only what changed there (new request, new facts) is the next step if needed.
+
+**Limits.** One run at a time per agent session (instances are shared). Whether less text means less time
+depends on the production transport: measure with session mode on and off.
 
 ---
 

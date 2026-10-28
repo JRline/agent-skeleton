@@ -196,7 +196,7 @@ class AppSmoke(TempDirs):
 
     def test_suggestion_card_lets_the_user_decide(self):
         self.lake_off()
-        def fake(self, messages, effort="none", stop=None, purpose="executor"):
+        def fake(self, messages, effort="none", stop=None, purpose="executor", conversation=None):
             replies = {"planner": '{"plan": ["Answer"], "suggest": {"toolkits": ["datalake"], "skill": "none", '
                                   '"why": "Needs lake data."}}',
                        "reviewer": '{"ok": true, "issues": []}'}
@@ -226,7 +226,7 @@ class AppSmoke(TempDirs):
 
     @staticmethod
     def quick_model(final_text="Answer."):
-        def fake(self, messages, effort="none", stop=None, purpose="executor"):
+        def fake(self, messages, effort="none", stop=None, purpose="executor", conversation=None):
             replies = {"planner": '{"title": "Capital questions", "plan": ["Answer"]}',
                        "reviewer": '{"ok": true, "issues": []}'}
             return replies.get(purpose, json.dumps({"thought": "done", "final": final_text}))

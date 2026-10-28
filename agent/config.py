@@ -69,6 +69,17 @@ TOOL_TIMEOUT_S = int(os.getenv("TOOL_TIMEOUT_S", "30"))     # default limit for 
 # so a stuck file read or search still fails fast.
 SQL_TIMEOUT_S = int(os.getenv("SQL_TIMEOUT_S", "900"))
 
+# ---------------------------------------------------------------- session memory (docs/design.md §4a)
+# "off": every call sends the whole prompt (stateless backends). "session": the backend keeps one memory per
+# channel (a fixed instance with a fixed effort), so the agent sends the fixed parts once and then only what is new.
+MODEL_MEMORY = os.getenv("MODEL_MEMORY", "off")
+CHANNEL_OF = {"executor": "executor", "action_review": "check", "planner": "review", "reviewer": "review",
+              "finisher": "review", "summariser": "review"}
+CHANNEL_EFFORT = {"executor": "none", "check": "medium", "review": "medium"}
+# Re-send the fixed parts after this much text since the last full send: the backend compresses old memory,
+# which can blur exact rules (reply format, tool names, required filters).
+MEMORY_REFRESH_TOKENS = int(os.getenv("MEMORY_REFRESH_TOKENS", "20000"))
+
 # ---------------------------------------------------------------- effort policy
 EFFORT = {
     "planner": "medium",

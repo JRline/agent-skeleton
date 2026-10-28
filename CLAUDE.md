@@ -22,6 +22,8 @@ read the section relevant to your task before changing code. `docs/setup.md` has
   standard library. Ask before adding any dependency.
 - Production uses the GPT CLI, wrapped as `call(text, effort) -> str` with effort `"none"` or `"medium"`.
   No native tool calling, no streaming, no system-role guarantees. Do not use features beyond this.
+  The one optional extension is session memory mode (`MODEL_MEMORY=session`, docs/design.md §4a):
+  `call(text, effort, channel)` and `new_session()`, for fixed model instances that keep their own memory.
 - Every model call goes through `memory.call_model` so it is logged with purpose, effort and latency.
 - `loop.py` stays UI-independent. `app.py` and `cli.py` only call `new_state`, `run_one_step`,
   `resolve_pending`, `load_state`, `abort` and `run`, plus `continue_with` (a follow-up instruction in the same

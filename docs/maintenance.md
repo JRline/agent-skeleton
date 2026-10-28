@@ -117,6 +117,8 @@ Useful files in `runs/<run id>/`: `log.jsonl` (every model and tool call, with p
 |---|---|---|
 | `LLM_BACKEND` | `prod` | Use the production chat API |
 | `PROD_API_MODULE` | your wrapper module | Module with `call(text, effort) -> str` (copy `agent/backends/prod_template.py`) |
+| `MODEL_MEMORY` | `session` if the wrapper has `channel` | Send fixed prompt parts once per instance (docs/design.md §4a); `off` sends everything each call |
+| `MEMORY_REFRESH_TOKENS` | `20000` | Session mode: re-send everything after this much text (lower it if answers drift after compression) |
 | `DATALAKE` | your lake module | Module with a read-only connection (copy `agent/backends/datalake_odbc_template.py`) |
 | `DATALAKE_VIEWS` | `view1,view2` | Optional allowlist of views the agent may query |
 | `AGENT_HOME` | project folder | Where `runs/`, `sandbox/` and `settings/` live |

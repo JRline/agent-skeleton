@@ -92,6 +92,11 @@ streamlit run app.py                        # Backend "claude", Model Haiku 5.5 
    python -m unittest discover -s tests -t . # FakeModel tests still pass
    ```
 5. Re-tune prompts and the effort policy against the production model. The local model will behave differently.
+6. If the production model keeps its own memory per instance, wrap it as `call(text, effort, channel)` (plus
+   `new_session()`) and set `MODEL_MEMORY=session` (docs/design.md §4a). Try it first on the Mac with the stand-in:
+   ```bash
+   LLM_BACKEND=prod PROD_API_MODULE=agent.backends.session_sim MODEL_MEMORY=session python cli.py --backend prod "..."
+   ```
 
 ## Configuration
 
@@ -99,6 +104,9 @@ streamlit run app.py                        # Backend "claude", Model Haiku 5.5 
 |---|---|---|
 | `LLM_BACKEND` | `fake` | `fake`, `ollama`, `claude` or `prod` |
 | `PROD_API_MODULE` | `existing_api_module` | module imported for `prod` |
+| `MODEL_MEMORY` | `off` | `session`: the backend keeps one memory per channel, so fixed prompt parts are sent once (docs/design.md §4a); needs a `call(text, effort, channel)` module |
+| `MEMORY_REFRESH_TOKENS` | `20000` | session mode: re-send everything after this much text |
+| `SIM_INNER`, `SIM_MEMORY_TOKENS` | `agent.backends.claude_cli`, `24000` | production stand-in (`agent/backends/session_sim.py`): inner model and memory size before compression |
 | `CLAUDE_MODEL`, `CLAUDE_CLI` | `claude-haiku-5-5`, auto | see `agent/backends/claude_cli.py` |
 | `DATALAKE` | `sqlite` | `sqlite` (in-process synthetic), `agent.backends.datalake_mock` (mock lake server) or a production lake module |
 | `MOCK_LAKE_URL`, `MOCK_LAKE_TOKEN` | `http://127.0.0.1:8765`, none | client settings for the mock lake server |

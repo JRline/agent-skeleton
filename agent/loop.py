@@ -416,6 +416,7 @@ def run_one_step(state: dict, model) -> dict:
             return state["events"][-1]
         state.clear()
         state.update(snapshot)          # same dict object: callers keep their reference
+        model.resync()                  # a backend with memory may hold part of the failed step: send all next time
         log(state, "model_error", error=str(e))
         return persist(state, event(state, "model_error", error=str(e)))
 
@@ -468,6 +469,7 @@ def _step(state: dict, model) -> dict:
             return state["events"][-1]
         state["consecutive_errors"] += 1
         state["last_error"] = str(e)
+        model.resync("executor")        # the reply format may have faded from the backend's memory
         if state["consecutive_errors"] >= config.MAX_CONSECUTIVE_ERRORS:
             return abort(state, f"Model kept replying outside the protocol: {e}")
         add_feedback(state, f"Your last reply could not be used ({e}). Follow the protocol exactly.")
@@ -521,6 +523,7 @@ def _step(state: dict, model) -> dict:
         problem = TOOLS[action.tool].check(TOOLS[action.tool].args.model_validate(action.input)) \
             if TOOLS[action.tool].check else None
         if problem:
+            model.resync("executor")                     # e.g. a missing required filter: re-send the rules
             state["last_signature"] = None               # it never ran: a corrected resubmission is not a repeat
             add_feedback(state, f"The {action.tool} request was not sent; fix it first: {problem}")
             return persist(state, event(state, "precheck", tool=action.tool, input=action.input,

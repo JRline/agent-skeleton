@@ -29,7 +29,7 @@ class FakeModel(ChatModel):
             self.replies = list(replies)
         self.calls: list[dict] = []
 
-    def complete(self, messages, effort="none", stop=None, purpose="executor"):
+    def complete(self, messages, effort="none", stop=None, purpose="executor", conversation=None):
         self.calls.append({"purpose": purpose, "effort": effort, "messages": messages})
         if purpose == "action_review" and (not isinstance(self.replies, dict) or purpose not in self.replies):
             return apply_stop(APPROVE_REQUEST, stop)        # unless a test scripts the request review
@@ -68,7 +68,7 @@ class DemoFakeModel(ChatModel):
     def __init__(self):
         self.calls: list[dict] = []
 
-    def complete(self, messages, effort="none", stop=None, purpose="executor"):
+    def complete(self, messages, effort="none", stop=None, purpose="executor", conversation=None):
         self.calls.append({"purpose": purpose, "effort": effort})
         if purpose == "planner":
             reply = {"plan": [

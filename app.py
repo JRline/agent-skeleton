@@ -143,6 +143,7 @@ def end_session() -> None:
     ss.session_toolkits = basic_toolkits()
     ss.skill = "Auto"
     ss.state = None
+    model_for(ss.get("backend", config.BACKEND)).new_session()   # a backend with memory starts fresh instances
 
 
 def stop_run() -> None:

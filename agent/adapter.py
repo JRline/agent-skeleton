@@ -7,6 +7,7 @@ with `ModuleChatModel`, so production, Ollama and test stubs are interchangeable
 from __future__ import annotations
 
 import importlib
+import inspect
 import time
 from typing import Literal
 
@@ -21,13 +22,21 @@ class CallCancelled(Exception):
 
 
 class ChatModel:
-    """The only interface the agent depends on. Stateless: pass the full message list."""
+    """The only interface the agent depends on. Always pass the full message list; a model whose backend keeps
+    memory (session mode) decides itself what part of it to send."""
 
     name = "base"
+    remembers = False        # True: the backend keeps the conversation, so the agent need not summarise it
 
     def complete(self, messages: list[Message], effort: Effort = "none",
-                 stop: list[str] | None = None, purpose: str = "executor") -> str:
+                 stop: list[str] | None = None, purpose: str = "executor", conversation: str | None = None) -> str:
         raise NotImplementedError
+
+    def new_session(self) -> None:
+        """A new agent session: backends with memory start fresh. Default: no-op."""
+
+    def resync(self, purpose: str | None = None) -> None:
+        """The backend's memory may not match the saved state: send everything next time. Default: no-op."""
 
     def model_id(self, effort: Effort = "none") -> str:
         """Which model answers at this effort, for the log, so runs on different models can be compared."""
@@ -65,12 +74,26 @@ class ModuleChatModel(ChatModel):
         self.retries = retries or config.MODEL_RETRIES
         self.backoff = backoff
         self.pass_messages = pass_messages
+        # Session mode needs a backend whose call() takes a channel (one remembering instance per channel).
+        accepts_channel = "channel" in inspect.signature(module.call).parameters
+        self.session = None
+        if config.MODEL_MEMORY == "session" and accepts_channel:
+            from .session import Session
+            self.session = Session()
+        self.remembers = self.session is not None
+        self.last_send: dict | None = None
 
-    def complete(self, messages, effort="none", stop=None, purpose="executor"):
-        payload = messages if self.pass_messages else render(messages)
+    def complete(self, messages, effort="none", stop=None, purpose="executor", conversation=None):
+        kwargs = {"effort": effort}
+        if self.session:
+            payload, self.last_send = self.session.prepare(messages, purpose, conversation)
+            kwargs = {"effort": config.CHANNEL_EFFORT[self.last_send["channel"]], "channel": self.last_send["channel"]}
+            self.last_send["effort"] = kwargs["effort"]
+        else:
+            payload = messages if self.pass_messages else render(messages)
         for attempt in range(self.retries):
             try:
-                out = self.module.call(payload, effort=effort)
+                out = self.module.call(payload, **kwargs)
                 return apply_stop(out, stop)
             except CallCancelled:
                 raise
@@ -79,6 +102,18 @@ class ModuleChatModel(ChatModel):
                     raise
                 time.sleep(self.backoff ** attempt)
         raise RuntimeError("unreachable")
+
+    def new_session(self):
+        """Forget what each channel holds, and let a backend with memory start fresh instances."""
+        if self.session:
+            self.session.new_session()
+            if hasattr(self.module, "new_session"):
+                self.module.new_session()
+
+    def resync(self, purpose=None):
+        if self.session:
+            from .session import channel_of
+            self.session.resync(channel_of(purpose) if purpose else None)
 
     def model_id(self, effort="none"):
         """Uses the module's optional `model_name(effort)`; modules without it log the backend name."""
