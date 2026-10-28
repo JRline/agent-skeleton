@@ -1,0 +1,12 @@
+# LangGraph prototype (lgagent/) only. Versions tested on the Mac, 2026-10-28: pin to production's approved versions.
+# These pull in about 20 more packages (langsmith, httpx, orjson, ormsgpack, xxhash, tenacity, PyYAML, ...).
+-r requirements.txt
+langchain==1.4.7
+langchain-core==1.7.0
+langchain-protocol==0.0.20
+langgraph==1.2.18
+langgraph-checkpoint==4.3.1
+langgraph-checkpoint-sqlite==3.1.2
+langgraph-prebuilt==1.1.1
+langgraph-sdk==0.4.10
+langsmith==0.14.14
