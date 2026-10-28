@@ -1,15 +1,18 @@
 # Instructions for coding assistants
 
-This repo is a Python agent that runs on a text-only model (production: the GPT CLI). `docs/design.md` is the design spec;
+This repo is a Python agent that runs on a text-only model (production: the GPT CLI), built on LangGraph / LangChain.
+`docs/design.md` is the design spec;
 read the section relevant to your task before changing code. `docs/setup.md` has setup steps; `docs/README.md` lists all documentation.
 
 ## Commands
 - Tests: `python -m unittest discover -s tests -t .` (must pass before you finish any task)
 - Demo run: `python cli.py --yes "Compute the latest capital ratio from inputs/sample_capital.csv"`
 - UI: `streamlit run app.py`
-- Backend check: `python smoke_model.py --backend ollama` (or `--backend claude`: Haiku via the Claude Code CLI)
+- Backend check: `python smoke_model.py --backend ollama` (or `--backend claude`: Haiku via the Claude Code CLI;
+  `--backend api`: a real OpenAI-compatible API, see `agent/backends/openai_api.py`)
 - Mock data lake server (closer to production): `python mock_lake/server.py`, then run with
-  `DATALAKE=agent.backends.datalake_mock`
+  `DATALAKE=agent.backends.datalake_mock` (per-user sign-in: start the server with `MOCK_LAKE_USERS=analyst:secret`
+  and the agent with `MOCK_LAKE_LOGIN=1`)
 - Replay script of a conversation: `python cli.py --export-script RUN_ID` (or the app's Export button)
 - Analysis run: `python cli.py --backend claude "/usage_comparison RWA by division, FY2025Q3 end vs latest"` (follow-up: `--resume RUN_ID "..."`)
 - Evals: `python eval.py --backend claude` (golden tasks in `tests/golden/`; results in `runs/evals/`). Run before and
@@ -24,11 +27,17 @@ read the section relevant to your task before changing code. `docs/setup.md` has
   No native tool calling, no streaming, no system-role guarantees. Do not use features beyond this.
   The one optional extension is session memory mode (`MODEL_MEMORY=session`, docs/design.md §4a):
   `call(text, effort, channel)` and `new_session()`, for fixed model instances that keep their own memory.
-- Every model call goes through `memory.call_model` so it is logged with purpose, effort and latency.
+- The agent is one LangChain `create_agent` graph (`agent/graph.py`). Use stock LangGraph / LangChain parts where
+  they fit; add custom middleware only for what they do not provide, and say why in its docstring.
+- Every model call goes through a role copy of the chat model (`TextChatModel.for_role`, or the native model) so the
+  `ModelLog` callback logs it with purpose, effort and latency.
 - `loop.py` stays UI-independent. `app.py` and `cli.py` only call `new_state`, `run_one_step`,
   `resolve_pending`, `load_state`, `abort` and `run`, plus `continue_with` (a follow-up instruction in the same
   conversation) and `rename` (the conversation title).
-- `run_one_step` advances exactly one step and persists. Human input happens only via `resolve_pending`.
+- `run_one_step` advances the graph to its next breakpoint or pause and persists. Human input happens only via
+  `resolve_pending` (LangGraph `Command(resume=...)`).
+- The data lake sign-in (`agent/credentials.py`) lives in memory only: never write it to state, logs, checkpoints,
+  settings, prompts or error text.
 - Tools never raise into the loop: `dispatch` turns errors into `{"ok": false, "error": ...}`.
 - Tools may only touch files inside `config.SANDBOX_DIR` (use `tools.sandbox_path`).
 - Anything that writes, sends or deletes must be `risky=True` (needs approval). The one exception is
@@ -63,11 +72,12 @@ Add `tests/test_plugin_<name>.py` for normal use, bad input and sandbox limits. 
 **Change a prompt** (`agent/prompts/*.md`): placeholders are `{{name}}`. Keep prompts short and
 literal with one JSON example. Run `smoke_model.py` against Ollama before and after.
 
-**Change loop behaviour** (`agent/loop.py`): add a FakeModel test in `tests/test_loop_fake_model.py`
-first, scripting replies per purpose: `FakeModel({"planner": [...], "executor": [...], "reviewer": [...]})`.
-Assert on `state["status"]`, events, and `model.efforts(purpose)`.
+**Change agent behaviour** (`agent/graph.py` middleware, `agent/loop.py` driver): add a FakeModel test in
+`tests/test_loop_fake_model.py` first, scripting replies per purpose:
+`FakeModel({"planner": [...], "executor": [...], "reviewer": [...]})` (`tests.helpers.first_step` plans and takes
+the first step). Assert on `state["status"]`, events, and `model.efforts(purpose)`.
 
-**Change the effort policy** (`agent/config.py` `EFFORT`, `loop.pick_effort`): update the effort
+**Change the effort policy** (`agent/config.py` `EFFORT`; recovery effort in `graph.SessionPrompt`): update the effort
 assertions in the loop tests.
 
 **Add a skill** (`plugins/skills/<name>.md`, no code): front matter `name`, `description`, `toolkits`, `when_to_use`, and
@@ -111,24 +121,40 @@ or the module's `list_views`).
 - Prompts follow the published best practices (ordered decisions, positive rules, reasons, tags); planner worked
   examples are swappable (`plugins/examples/`). User answers and rejection reasons are facts that outrank the plan.
 
+## Status of branch `langgraph-prototype` (2026-10-28)
+- The agent runs on LangGraph 1.2 / LangChain 1.4: one `create_agent` graph (`agent/graph.py`) with stock approvals,
+  interrupts, checkpoints and summarising, and custom middleware for planning, the session prompt, the request
+  check, repeats and the answer check. `agent/loop.py` drives it one step at a time and keeps `state.json` and its
+  events, so the UI, export, replay and eval are unchanged. The step machine is gone (it is on `main`).
+- Also new on the branch: session memory mode, data lake sign-in (memory only; ODBC template with UID/PWD), and two
+  ways to swap in a real model (`LLM_BACKEND=api`, `LLM_BACKEND=langchain`). The CLI asks for a rejection reason.
+- Verified 2026-10-29: all 283 unit tests pass (Python 3.14 venv with requirements.txt), CLI demo runs, and two
+  golden tasks on Haiku (`file_average`, `rwa_latest_total`) score 1.00. The full golden eval has not been run on
+  this branch yet.
+
 ## Next tasks, in order
 1. Pin `requirements.txt` to production's exact Python and package versions (ask the owner). The grid number
    format (`NumberColumn(format="localized")`) and `st.segmented_control` need a recent Streamlit: check them.
 2. Production wrapper: copy `agent/backends/prod_template.py` (and the ODBC lake template) into modules that wrap
    the real API and lake. Done inside the closed environment, by the owner. Then `smoke_model.py --backend prod`.
 3. Re-run the full eval against `prod` and re-tune prompts only if needed (one change at a time, before/after).
-4. Optional: summarise old turns in larger batches (now nearly every step); tell the executor how many rows a
-   cut-off preview holds; let a rejection reason come from the CLI too.
+4. On this branch: run the full golden eval on the LangGraph engine and compare with `main`'s recent runs; get the
+   extra packages approved; then decide whether to merge.
+5. Optional: tell the executor how many rows a
+   cut-off preview holds.
 
 ## Design decisions (keep unless the owner agrees otherwise)
 - Plan → execute → review, with JSON actions validated by Pydantic. Chosen because small models are
   unreliable at open-ended tool use.
 - Effort policy: `none` by default; `medium` for planner, reviewer, recovery after an error or repeat,
   and the last JSON-repair attempt. Every call is logged with effort and latency so this can be tuned.
-- Step machine with persisted state, so Streamlit reruns, approvals and resume all use the same code.
+- LangGraph runtime (2026-10-28, branch `langgraph-prototype`): one `create_agent` graph with checkpoints and
+  breakpoints replaced the custom step machine, so Streamlit reruns, approvals and resume all use the same code and
+  less of it is ours. The previous step machine is on `main`.
 - Arithmetic lives in tools (`run_python`, SQL), never in the model. A code check and the reviewer verify
   that numbers in the final answer trace to refs.
-- Standard library + pydantic/pandas/openpyxl/streamlit only, because production is closed.
+- Standard library + pydantic/pandas/openpyxl/streamlit + langchain/langgraph (pinned) only, because production is
+  closed.
 
 ## Known limitations / gotchas
 - Tool timeouts use a thread: a timed-out tool keeps running in the background. Tools get `TOOL_TIMEOUT_S` (30 s);

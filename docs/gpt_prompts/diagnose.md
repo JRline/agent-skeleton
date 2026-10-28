@@ -7,9 +7,10 @@ WHAT WENT WRONG (my words):
 HOW THE AGENT WORKS (so you can read the record):
 - planner: writes the plan (or suggests a skill whose steps become the plan).
 - executor: one JSON action per step: a tool call or the final answer.
-- action_review: checks each data read or analysis request before the user approves it.
-- reviewer: checks the final answer against the facts; the agent retries if it fails.
-- summariser: compresses old turns. USER ANSWER / USER REJECTED facts are the user's own words.
+- action_review: checks each data read or analysis request before the user approves it ("precheck" = sent back).
+- reviewer: checks the final answer against the facts after a code check that every number has a source; the agent
+  retries if it fails ("review" events).
+- summariser: compresses old messages in long runs. USER ANSWER / USER REJECTED facts are the user's own words.
 
 PLEASE REPLY WITH:
 1. The first step where the run went wrong, quoting the record.

@@ -59,3 +59,7 @@ Default filters: <column> = '<value>' AND <column> = '<value>' ...
 
 The section `## usage_limits` in `sandbox/references/datalake_dictionary.md` follows this format; use it as the
 model for a new entry.
+
+Sign-in is not part of an entry: a lake that needs each user's own login is set up once in its lake module
+(`NEEDS_LOGIN`, `connect(login=...)`; see `agent/backends/datalake_odbc_template.py`), and never put a user ID or
+password in the dictionary.

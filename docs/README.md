@@ -6,8 +6,8 @@ Every document for this project, by who needs it. Start with the first row that 
 
 | Document | What it covers |
 |---|---|
-| [setup.md](setup.md) | Install, the three stages (fake model, local model, production), and every setting |
-| [usage.md](usage.md) | How a session works: tools, skills, the data lake, attachments, approvals, and the evals |
+| [setup.md](setup.md) | Install, the three stages (fake model, local model, production), swapping in a real model API, and every setting |
+| [usage.md](usage.md) | How a session works: tools, skills, the data lake and its sign-in, attachments, approvals, and the evals |
 
 ## For people maintaining it (with the GPT CLI)
 
@@ -22,7 +22,7 @@ Every document for this project, by who needs it. Start with the first row that 
 
 | Document | What it covers |
 |---|---|
-| [design.md](design.md) | The full design spec: architecture, protocol, tools, memory, guardrails, effort policy, evals. Read-only: change it only with the owner's agreement. |
+| [design.md](design.md) | The full design spec: the LangGraph agent and what is stock or custom, the reply protocol, tools, data lake sign-in, memory, guardrails, effort policy, evals. Read-only: change it only with the owner's agreement. |
 
 ## For coding agents
 

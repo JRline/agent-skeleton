@@ -1,19 +1,24 @@
 # Design spec — Python agent over a text-only model API
 
-Design spec for a small, auditable agent that runs on a chat-only model
-(the production GPT model, effort `none` or `medium`) through an existing API module.
-Written so that a person or a coding agent can build it section by section.
+Design spec for a small, auditable agent that runs on a text-only model (production: the GPT CLI, effort `none` or
+`medium`) through an existing API module. The agent runtime is **LangGraph / LangChain**: the stock parts do the
+generic work (the model ⇄ tool loop, pausing for people, saving and resuming, summarising), and the code here adds
+only what the domain and the text-only model need. Written so that a person or a coding agent can follow it section
+by section.
 
 ---
 
 ## 1. Assumptions
 
-- An API module already exists. It takes input text (or a message list) and returns output text.
-  The only place that knows its real signature is `adapter.py` (§4).
-- The model has **no native tool calling**. Tools are invoked through a JSON text protocol (§5).
+- An API module already exists. It takes input text (or a message list) and returns output text. The only place
+  that knows its real signature is the backend module behind `adapter.py` (§4).
+- The production model has **no native tool calling**. Tools are invoked through a JSON text protocol (§5), added
+  by one LangChain chat model (`chat_model.py`), so the rest of the agent is ordinary LangChain. A model with native
+  tool calling can be swapped in instead (`LLM_BACKEND=langchain`).
 - Effort is selectable per call: `none` (fast, cheap) or `medium` (better reasoning, slower).
-- Python orchestrates everything: loop, tools, memory, validation, logging.
-  The model only ever produces text.
+- Python orchestrates everything: the graph, tools, checks, logging. The model only ever produces text.
+- LangGraph and LangChain (and the packages they pull in) are approved in the closed environment, at pinned
+  versions (`requirements.txt`).
 - No confidential data is sent to the model unless the deployment is approved for it.
 
 ---
@@ -21,54 +26,78 @@ Written so that a person or a coding agent can build it section by section.
 ## 2. Architecture
 
 ```
-   Streamlit UI (app.py) ── or ── CLI / tests
-            │  goal, approvals
-┌───────────▼──────────────────────────────┐
-│ Python orchestrator                      │
-│  ┌────────────┐ ┌────────┐ ┌──────────┐  │
-│  │ Agent loop │ │ Tools  │ │ Memory   │  │
-│  └────────────┘ └────────┘ └──────────┘  │
-│  parsing · validation · retries · logs   │
-└───────────▲──────────────────────────────┘
-            │  complete(messages, effort)
-┌───────────▼──────────────────────────────┐
-│ Model adapter (wraps existing API module)│
-└───────────▲──────────────────────────────┘
-            │
-      production GPT model (text only)
+   Streamlit UI (app.py) ── or ── CLI / eval / tests
+            │  goal, approvals, answers, sign-in
+┌───────────▼──────────────────────────────────────────────┐
+│ Conversation driver (loop.py): one step at a time,        │
+│ conversation record runs/<id>/state.json (events, facts)  │
+└───────────▲──────────────────────────────────────────────┘
+            │  invoke / Command(resume=...)
+┌───────────▼──────────────────────────────────────────────┐
+│ LangGraph agent (graph.py): one create_agent graph        │
+│  Planner → Choice → model ⇄ tools → AnswerCheck            │
+│  middleware: SessionPrompt · RequestCheck · RepeatGuard ·  │
+│  HumanInTheLoop (approvals) · Summarization                │
+│  tools: the toolkits as LangChain tools (lc_tools.py)      │
+│  checkpoints: runs/checkpoints.sqlite (thread = run id)    │
+└───────────▲──────────────────────────────────────────────┘
+            │  LangChain chat model
+┌───────────▼──────────────────────────────────────────────┐
+│ TextChatModel (chat_model.py): tool calls and structured   │
+│ output through a JSON reply protocol, repairs              │
+└───────────▲──────────────────────────────────────────────┘
+            │  complete(messages, effort, purpose)
+┌───────────▼──────────────────────────────────────────────┐
+│ Backend (adapter.py): retries, cancel, session memory      │
+└───────────▲──────────────────────────────────────────────┘
+            │  call(text, effort)
+      production GPT model · OpenAI-compatible API · Ollama · Claude CLI · FakeModel
 ```
 
 Rules:
-- Everything above the adapter is backend-independent.
-- Everything below the UI is UI-independent. `app.py` only calls `loop.py`,
-  so the same agent runs from Streamlit, the CLI, or tests.
+- Everything above the backend is backend-independent; a native LangChain chat model replaces the bottom three
+  boxes (`LLM_BACKEND=langchain`).
+- Everything below the UI is UI-independent. `app.py` and `cli.py` only call `loop.py`, so the same agent runs from
+  Streamlit, the CLI, eval or tests.
+- Generic agent behaviour comes from LangGraph / LangChain; custom code is limited to what they do not provide
+  (listed in §8).
 
 ---
 
 ## 3. Repository layout
 
 ```
-app.py            # Streamlit UI: chat, step trace, approvals, file upload (§12)
+app.py            # Streamlit UI: chat, step trace, approvals, data lake sign-in, file upload (§12)
 results_page.py   # Results view of a conversation's tables (opened only on request)
 cli.py            # same agent from the command line
 eval.py           # golden-task evals (tests/golden/*.json → runs/evals/)
+smoke_model.py    # check a backend: replies to tool prompts through the agent's chat model
 agent/
-  adapter.py      # ChatModel interface, ModuleChatModel wrapper, get_model(backend)
+  graph.py        # the agent: one LangChain create_agent graph and its custom middleware (§8)
+  loop.py         # conversation driver: run_one_step, resolve_pending, continue_with, run; events in state.json
+  chat_model.py   # TextChatModel: a LangChain chat model over the text-only API (JSON tool calls, repairs) (§5)
+  lc_tools.py     # the toolkits as LangChain tools (through tools.dispatch), ask_user, the model-call log
+  checks.py       # number check, cited outputs, request history, result tables, answer timing (shared checks)
+  credentials.py  # data lake sign-in, held in memory only (§6)
+  adapter.py      # ChatModel interface, ModuleChatModel, LangChainModel, get_model(backend)
+  session.py      # session memory mode: send fixed prompt parts once (§4a)
   backends/
     fake.py         # FakeModel (scripted, for tests) + DemoFakeModel (demo run)
+    openai_api.py   # a real model behind any OpenAI-compatible API (LLM_BACKEND=api), standard library only
     ollama_api.py   # local model on a Mac, same call(text, effort) as production. Thinking follows effort by
                     # default (off for none, on for medium; retried without it if the model can't think);
                     # OLLAMA_THINK=0 leaves the model's default
     claude_cli.py   # Claude (Haiku by default) via the Claude Code CLI on the Mac; development only
+    session_sim.py  # production stand-in for session memory mode (fixed instances with memory)
     prod_template.py# shape of the production module
-    datalake_odbc_template.py # shape of the production data lake module (the production lake over ODBC)
+    datalake_odbc_template.py # production data lake module: ODBC connection string with the user's UID and PWD
     datalake_mock.py          # client for the mock lake server (DATALAKE=agent.backends.datalake_mock)
-  protocol.py     # JSON parsing, validation, repair schedule
+  protocol.py     # finding the one JSON object in a reply (tolerant of fences and reasoning)
   tools.py        # @tool registry, shared helpers, dispatch (tools live in toolkits)
   toolkits/       # built-in toolkits, all basic: files, docs, analysis, datalake
   pysandbox.py    # model-written analysis code: static check, then an isolated run via _pyrunner.py
   plugins.py      # loads toolkits + plugins, catalogue, /command parsing, basic toolkits
-  datalake.py     # read-only SQL access: check_select guard, server-side limits, required filters, metadata cache
+  datalake.py     # read-only SQL access: check_select guard, server-side limits, required filters, sign-in, metadata cache
   tablecache.py   # each table file parsed once per version (memory + pickles in sandbox/work/.cache/)
   replay.py       # exports a conversation as one replayable analysis script (§13)
   export.py       # exports a conversation as one self-contained HTML page (§12)
@@ -76,13 +105,12 @@ agent/
   outputs.py      # tool outputs as tables (shared by the UI and the HTML export)
   sqlfmt.py       # SQL for people: one clause per line (approval cards, Sources, replay); never changes what runs
   skills.py       # parse plugins/skills/*.md, list/render skills
-  memory.py       # state, persistence, logging, rolling summary, prompt builder
-  loop.py         # step machine: plan → execute → review
-  prompts/        # system.md, planner.md, reviewer.md, action_review.md, summariser.md, finisher.md
+  memory.py       # the conversation record (state.json), persistence, log.jsonl, prompt and context helpers
+  prompts/        # system.md, planner.md, reviewer.md, action_review.md, finisher.md
   settings.py     # user prompt settings: role, answer style, template overrides (settings/prompts.json)
   config.py       # budgets, limits, effort policy, paths, backend choice
 plugins/          # extension point: tools/*.py (toolkits), skills/*.md, examples/, README.md (contract: docs/plugins.md)
-runs/             # one folder per run: state.json, log.jsonl, outputs/
+runs/             # one folder per conversation: state.json, log.jsonl, outputs/; checkpoints.sqlite (LangGraph)
 sandbox/          # the only folder tools may read or write
   inputs/         # input files (uploads land here)
   outputs/<run>/  # files written by write_file / save_table (approval needed)
@@ -92,66 +120,44 @@ sandbox/          # the only folder tools may read or write
   references/     # reference documents skills cite, e.g. datalake_dictionary.md (what each lake view means)
 mock_lake/        # local stand-in for the remote lake, never inside sandbox/
   data/           # synthetic CSVs, one per view
-  server.py       # mock lake server: separate read-only process over HTTP (python mock_lake/server.py)
+  server.py       # mock lake server: separate read-only process over HTTP; per-user sign-in (MOCK_LAKE_USERS)
 sources.py        # UI: [ref: …] / [doc: …] → numbered links and a Sources list under the answer
-tests/
-  test_protocol.py  test_tools.py  test_loop_fake_model.py  test_app.py  test_conversation.py
-  test_datalake.py  test_mock_lake.py  test_io.py  test_pysandbox.py  test_replay.py  test_sources.py
-  test_skills.py  test_plugins.py  test_settings.py  test_eval.py  test_ollama_backend.py  test_claude_cli.py
-  golden/         # eval tasks
+tests/            # one file per area (test_loop_fake_model.py: the agent end to end with FakeModel); golden/ for evals
 ```
-
-The executor instructions live in the STATE block built by `memory.render_state`, so there is no separate executor.md.
 
 ---
 
-## 4. Model adapter (`adapter.py`)
+## 4. Model adapter (`adapter.py`) and backends
 
-One interface. The rest of the code calls nothing else.
+The graph talks to a **LangChain chat model**. For the text-only production API that is `TextChatModel`
+(`chat_model.py`, §5), which calls an `adapter.ChatModel`:
 
 ```python
-from typing import Literal
-import time, existing_api_module as api   # <- your module
-
-Effort = Literal["none", "medium"]
-
 class ChatModel:
-    def complete(self, messages: list[dict], effort: Effort = "none",
-                 stop: list[str] | None = None, retries: int = 3) -> str:
-        text = self._render(messages)            # adapt if the module accepts a message list
-        for attempt in range(retries):
-            try:
-                out = api.call(text, effort=effort)   # <- the one real call
-                return self._apply_stop(out, stop)
-            except Exception:
-                if attempt == retries - 1: raise
-                time.sleep(2 ** attempt)
-
-    @staticmethod
-    def _render(messages):
-        """Flatten roles if the module only takes a single string."""
-        parts = [f"{m['role'].upper()}:\n{m['content']}" for m in messages]
-        parts.append("Reply as ASSISTANT. Output only your reply.")
-        return "\n\n".join(parts)
-
-    @staticmethod
-    def _apply_stop(text, stop):
-        if not stop: return text
-        cuts = [text.find(s) for s in stop if s in text]
-        return text[:min(cuts)] if cuts else text
+    def complete(self, messages: list[dict], effort="none", stop=None, purpose="executor",
+                 conversation=None) -> str: ...
+    def model_id(self, effort="none") -> str: ...      # logged with every call
+    def cancel(self) -> None: ...                       # Stop in the UI
 ```
 
-In the skeleton, `complete()` also takes `purpose` (planner, executor, reviewer, summariser).
-Real backends ignore it; FakeModel uses it to route scripted replies and the log records it.
-Backends are chosen with `LLM_BACKEND=fake|ollama|claude|prod`; `prod` imports the module named by
-`PROD_API_MODULE`, which must expose `call(text, effort) -> str`. `claude` runs `claude -p` (Claude Code CLI,
-own tools off, our system prompt, empty temp folder; effort none→low, medium→medium) for fast development
-tests with a real model. Its prompts go to Anthropic, so synthetic data only. Backends may expose
-`model_name(effort)` (logged) and `cancel()` (used by Stop).
+`ModuleChatModel` wraps any module with `call(text, effort) -> str`: retries with backoff, stop sequences,
+`model_name(effort)` for the log, `cancel()`, and the session memory mode (§4a). `purpose` (planner, executor,
+action_review, reviewer, finisher, summariser) is fixed per role: each role gets its own copy of the chat model
+(`TextChatModel.for_role`) with its effort from the policy (§9). FakeModel routes scripted replies by purpose.
 
-Contract: the caller always builds and passes the full message list. With `MODEL_MEMORY=off` (the default)
-the adapter sends all of it on every call (**stateless**). If the module accepts role-tagged messages natively,
-pass them through instead of `_render`. With `MODEL_MEMORY=session`, see §4a.
+Backends (`LLM_BACKEND`, `get_model`):
+
+| Backend | What | Notes |
+|---|---|---|
+| `prod` | the module named by `PROD_API_MODULE` (`call(text, effort)`; copy `backends/prod_template.py`) | production |
+| `api` | any OpenAI-compatible chat API (`backends/openai_api.py`: `API_URL`, `API_MODEL`, `API_MODEL_MEDIUM`, `API_KEY_FILE`, `API_EFFORT_PARAM`) | standard library only; the swap to a real API is these settings |
+| `langchain` | any LangChain chat model, `LC_MODEL="provider:model"` (`init_chat_model`) | used **natively**: its own tool calling and structured output replace the JSON protocol; needs the provider package |
+| `ollama` | a local model on the Mac | development |
+| `claude` | Claude (Haiku by default) via `claude -p` | development; synthetic data only |
+| `fake` | the scripted demo | tests and demos |
+
+Contract: the caller always passes the full message list. With `MODEL_MEMORY=off` (the default) the adapter sends
+all of it on every call (**stateless**). With `MODEL_MEMORY=session`, see §4a.
 
 ## 4a. Session memory mode (`session.py`, `MODEL_MEMORY=session`)
 
@@ -173,14 +179,14 @@ planner and request check, and split the executor whenever it recovers at medium
 
 | Channel | Effort | Serves | What each call sends |
 |---|---|---|---|
-| `executor` | none | executor actions and their repairs | fixed blocks once; then new turns + a one-line reminder + STATE |
+| `executor` | none | executor actions and their repairs | fixed blocks once; then new turns + a one-line reminder |
 | `check` | medium | request review (`action_review`) | the whole self-contained prompt, under a "new request" header |
 | `review` | medium | planner, reviewer, finisher | the whole self-contained prompt, under a "new request" header |
 
 The mapping is `config.CHANNEL_OF` / `config.CHANNEL_EFFORT`. The executor stays on `none` even when the stateless
 policy would raise it to `medium` for recovery: its history lives in one instance.
 
-**What the executor channel sends.** `session.Session.prepare()` takes the full message list the agent built and
+**What the executor channel sends.** `session.Session.prepare()` takes the full message list the chat model built and
 compares it with what the channel already holds (a fingerprint per fixed block, the conversation id, the number
 of turns sent):
 - **Fixed blocks** — the reply protocol, the tool list, the toolkit rules, the active skill (each `## ` section of
@@ -188,18 +194,18 @@ of turns sent):
   toolkit enabled, a skill accepted, a follow-up goal) is sent again alone as `UPDATE (<block>)`.
 - **New turns** since the last call (observations, feedback). The model's own replies are not repeated: its
   memory has them.
-- **A reminder line** with the exact reply format and the enabled tool names, and the **STATE block** (plan,
-  current step, facts) on every call. These keep each call correct even if older memory has been compressed.
+- **A reminder line** with the exact reply format and the enabled tool names on every call, so each call stays
+  correct even if older memory has been compressed. (The plan is a fixed block of the system prompt.)
 - **A repair** sends only the correction: the instance already holds its bad reply.
 
-**Full send** (every fixed block, a `NEW CONVERSATION <id>` header, the recent turns and STATE) when:
-the channel has not seen this conversation yet; the agent's state has fewer turns than were sent (a step was
-undone and retried); `resync()` was called (after a failed model call, a protocol error, or a request with a
+**Full send** (every fixed block, a `NEW CONVERSATION <id>` header and the recent turns) when:
+the channel has not seen this conversation yet; the conversation has fewer turns than were sent (a step was
+retried from its checkpoint); `resync()` was called (after a failed model call, a protocol error, or a request with a
 missing required filter, i.e. when the memory may not match the saved state or the rules may have faded); or more
 than `MEMORY_REFRESH_TOKENS` have been sent since the last full send (periodic refresh against compression).
 
-**Other effects.** The summariser does not run (`ChatModel.remembers`): the backend holds the history, and STATE
-carries the plan and facts. Each model log line records `channel`, `send` (full / delta / repair) and
+**Other effects.** The graph leaves out `SummarizationMiddleware` (`ChatModel.remembers`): the backend holds the
+history. Each model log line records `channel`, `send` (full / delta / repair) and
 `sent_tokens` next to the full prompt's `prompt_tokens`, so the full prompt of any call can still be rebuilt.
 
 **Backend contract.** Session mode switches on only if `MODEL_MEMORY=session` **and** the module's `call()`
@@ -223,36 +229,40 @@ depends on the production transport: measure with session mode on and off.
 
 ---
 
-## 5. Protocol (`protocol.py`)
+## 5. Reply protocol (`chat_model.py`, `protocol.py`)
 
-The model must reply with exactly one JSON object per turn.
+The text-only model replies with exactly one JSON object per turn:
 
 ```json
 {"thought": "short reasoning", "tool": "read_file", "input": {"path": "data.xlsx"}}
-{"thought": "short reasoning", "final": "the deliverable"}
+{"thought": "short reasoning", "final": "the deliverable", "tables": [{"name": "...", "title": "..."}], "title": "..."}
 ```
 
-Rules given to the model:
-1. Output one JSON object only. No prose outside it.
-2. Use exactly one of `tool` or `final`.
-3. Use only listed tools, with arguments matching their schema.
-4. Never invent tool results. Wait for `OBSERVATION:`.
-5. If information is missing, use `ask_user` rather than guessing. Never use `ask_user` to ask permission:
-   risky tools ask for approval themselves.
-6. If data has several periods and the goal doesn't say which, use the latest and name it in `final`.
+`TextChatModel` is an ordinary LangChain chat model, so `create_agent`, `ToolNode`, the middleware and
+`with_structured_output` work unchanged on top of it:
+- `bind_tools(tools)`: the tool list (name, description, arguments from each tool's Pydantic model) and the reply
+  protocol are appended to the system prompt. A `tool` reply becomes an `AIMessage` with a tool call (the
+  `thought` kept in `additional_kwargs`); a `final` reply becomes the answer, with `tables` and `title` kept.
+- `with_structured_output(Schema)`: the reply must be one JSON object that validates against `Schema` (planner,
+  request review, reviewer, finisher).
+- Tool results go back to the model as `OBSERVATION: {"ok": …, "ref": …, "result": …}` user turns; the model's own
+  calls as the JSON it wrote. Calls stop at `OBSERVATION:`.
+- Parsing: `parse_json_markdown`, then `protocol.extract_json` for replies with reasoning or prose around the
+  object (the last valid `{…}`; a cut-off block or two objects back to back are refused).
+- Validation: the tool must be one offered to the model. A tool of a toolkit that is not enabled comes back marked
+  `needs_toolkit`, so the user can be asked (§6). Arguments are validated against the tool's Pydantic model before
+  the request is reviewed or shown for approval (§8).
+- Repairs: an unusable reply gets the original messages plus only the latest bad reply (last 400 chars) and
+  `Invalid output: <error>. Reply again with exactly one JSON object as specified.`, so the prompt does not grow:
+  `MAX_REPAIRS` times at the role's effort, then once at `medium`. After that the step fails as a retryable
+  `model_error` (§8).
 
-Python side:
-- `extract_json(text)`: take the last valid `{…}` block, ignoring reasoning and quoted JSON before it. Tolerate code fences.
-  Reject a broken or cut-off block after it, and two objects back to back (two actions at once).
-- Validate with Pydantic: the tool exists, the arguments match the schema, exactly one of `tool`/`final`.
-- On failure, retry from the original messages plus only the latest bad reply (last 400 chars) and
-  `"Invalid output: <error>. Reply with one JSON object per the protocol, and no other text."`, so the prompt doesn't grow.
-  At most 2 repair attempts with effort `none`, then escalate one attempt to `medium`, then abort the step.
-- Always call with `stop=["OBSERVATION:"]`.
+A native LangChain model (`LLM_BACKEND=langchain`) skips all of this: it is given the same rules and tools and
+uses its own tool calling.
 
 ---
 
-## 6. Tools (`tools.py`)
+## 6. Tools (`tools.py`, `lc_tools.py`)
 
 ### Registration
 
@@ -266,8 +276,9 @@ def tool(name, desc, args: type[BaseModel], risky=False):
     return wrap
 ```
 
-The system prompt is rendered from `TOOLS`: name, description, JSON schema, one example.
-Code and prompt never drift apart.
+Each registry tool becomes a LangChain `StructuredTool` (`lc_tools.lc_tools`) with the same Pydantic args model,
+so the tool list the model sees is rendered from `TOOLS` and code and prompt never drift apart. Toolkit authors
+keep writing plain `@tool` functions (docs/plugins.md); they never touch LangChain.
 
 ### Toolkits and plugins (`agent/toolkits/`, `plugins/`, `plugins.py`)
 Tools are grouped in **toolkits**: one module with `TOOLKIT = {"name", "description", "basic", "guidance"}`
@@ -286,12 +297,13 @@ or the docs unless the user specifically agrees.
   toolkits in the sidebar, with `/name` in the task (a toolkit, a tool → its toolkit, a skill → forced skill +
   its toolkits; `plugins.parse_commands`), or with CLI `--tools`. They stay on until End session (CLI: one
   invocation = one session). Each run records its toolkits in `state["toolkits"]`.
-- The model sees only enabled tools; `parse_action` validates against them.
+- The model is offered only enabled tools (`graph.SessionPrompt` filters each model call).
 - **Suggestions, the user decides:** the planner may reply `"suggest": {"toolkits", "skill", "why"}` (once per
   run). Real, not-yet-enabled items pause the run in `awaiting_choice`; `resolve_pending(choice=...)` accepts
   only offered items: a skill → its steps and toolkits; toolkits only → re-plan once; nothing → keep the plan.
   Mid-run, if the executor calls a tool from a disabled toolkit, the run pauses with a one-toolkit suggestion
-  (`replan: false`): accepted → continue with it; declined → feedback, and that toolkit is not offered again.
+  (`replan: false`, an interrupt in `RequestCheck`): accepted → continue with it; declined → feedback, and that
+  toolkit is not offered again. All of these pauses are LangGraph interrupts, answered with `resolve_pending`.
 
 ### Built-in tools (by toolkit: files = read_file, write_file, save_table; docs = recall, search_docs;
 analysis = run_python; datalake = list_datasets, describe_dataset, sql_query; core = ask_user)
@@ -336,6 +348,20 @@ Development, from the synthetic CSVs in `mock_lake/data/` (outside the sandbox, 
   down, tools return "Data lake server not reachable … Start it with: python mock_lake/server.py".
 What each view means is in `sandbox/references/datalake_dictionary.md` (`datalake.view_notes`), a reference
 document the skills cite.
+
+**Sign-in (`credentials.py`).** A lake that needs each user's own login sets `NEEDS_LOGIN` in its module (the ODBC
+template does). The UI's sidebar then shows **Data lake sign-in** (user ID, password; the CLI: `--lake-user`, password
+asked without echo). The sign-in is checked with one catalogue call, then:
+- held only in this process's memory: per browser session in Streamlit's session state, and lent per conversation
+  (`credentials.use(run_id, login)`) for the time it runs; never written to `state.json`, `log.jsonl`, the
+  checkpoints, settings or a prompt, so the model never sees it; `Login`'s repr hides the password;
+- passed to the lake module as `connect(login=...)` (and `list_views` / `partitions`); the ODBC template builds
+  `<LAKE_ODBC>;UID={user};PWD={password}` (values braced, so `;` or `}` in a password cannot break the string);
+- masked in every error text (`credentials.scrub`), since drivers may echo the connection string;
+- forgotten on Sign out, End session, or when the process ends. Without a sign-in, lake tools say how to sign in.
+The metadata cache is per user (a user may see a different catalogue). Use HTTPS / an encrypted driver connection
+in production; the mock server's HTTP basic auth (`MOCK_LAKE_USERS="user:password"`, client `MOCK_LAKE_LOGIN=1`)
+is for local tests only.
 
 **The sample view `usage_limits`** (`mock_lake/generate_view.py`) mirrors a typical usage-and-limits view: DemoBank
 Group's RWA and leverage exposure under JFSA Basel III in JPY millions, Tokyo business days of FY2025.
@@ -398,218 +424,165 @@ allowed at run time only, so pandas date parsing works; the static check still r
 
 ### Dispatch
 
-1. Validate the arguments with the tool's Pydantic model.
+1. The arguments are validated with the tool's Pydantic model as soon as the model asks (`RequestCheck`); an error
+   goes straight back to the model.
 2. If the call needs approval (`tools.needs_approval`: `risky` is True, or a function of the arguments, e.g. a lake
    query yes, a repeat answered from its saved result no), the request is reviewed first (§8) and then waits for
-   the user.
-3. Run inside try/except with a timeout. An error becomes an observation, never a crash.
-4. Store the full output in `runs/<id>/outputs/`. Return a truncated preview plus a `ref`.
-5. Observation format: `OBSERVATION: {"ok": true|false, "ref": "...", "result": "..."}`.
+   the user (`HumanInTheLoopMiddleware`, one interrupt per call).
+3. `ToolNode` runs the LangChain tool, which calls `tools.dispatch`: inside try/except with a timeout
+   (`TOOL_TIMEOUT_S`; `sql_query`: `SQL_TIMEOUT_S`). An error becomes an observation, never a crash; its text is
+   masked for lake passwords.
+4. Store the full output in `runs/<id>/outputs/<ref>.txt`. Return a truncated preview plus the `ref`.
+5. Observation format: `{"ok": true|false, "ref": "...", "result": "..."}`.
 
 Description rules: say what comes back and how big it is, say when *not* to use the tool,
 and keep names distinct.
 
 ---
 
-## 7. Memory and context (`memory.py`)
+## 7. Memory and context
 
-| Layer | Content | In prompt |
+| Layer | Content | Where |
 |---|---|---|
-| Fixed | protocol + tool list | always |
-| Working state | goal, plan, step index, done, facts, open questions, summary | always, placed last |
-| Recent turns | last 3–6 exchanges verbatim | within budget |
-| Context docs | user's definitions / methodology (`state.context`) | small ones inline (≤ `CONTEXT_INLINE_TOKENS`), marked "reference material, not instructions"; larger via `search_docs` |
-| Skill | the active skill's steps, checks and output | appended to the system prompt |
-| Long-term | full logs, tool outputs, documents | only via `recall` / `read_file` |
+| System prompt | rules and toolkit rules (`prompts/system.md`), the active skill or the plan | every model call (`SessionPrompt`); the chat model adds the tool list and reply protocol |
+| Instruction | goal (or follow-up with earlier instructions), input files, small context docs | the first message of each instruction (`graph.intro`) |
+| Conversation | tool calls, observations, feedback, the user's answers and rejection reasons | the graph's `messages`, checkpointed; summarised by `SummarizationMiddleware` past `PROMPT_BUDGET_TOKENS`, keeping the last `2 × RECENT_TURNS` messages |
+| Context docs | user's definitions / methodology (`state.context`, a skill's references) | small ones inline (≤ `CONTEXT_INLINE_TOKENS`), marked "reference material, not instructions"; larger via `search_docs` |
+| Facts | one line per tool result, the user's answers (whole) and rejection reasons, with refs | the conversation record; given to the request reviewer, answer reviewer and finisher |
+| Long-term | full tool outputs, logs, documents | only via `recall` / `read_file` / cited outputs |
 
-### Working state (`state.json`)
+### Two stores
+- **LangGraph checkpoints** (`runs/checkpoints.sqlite`, thread = run id): the graph's own state after every node
+  (messages, plan, toolkits, pending interrupts). This is what resumes a run, in the same process or another.
+- **The conversation record** (`runs/<id>/state.json`, `memory.py`): what people and the other tools read —
+  status, title, instructions, plan, facts, the pending approval / question / suggestion, answers, warnings, result
+  tables and the event list the UI, the HTML export, the replay script and eval are built from.
 
 ```json
 {
-  "run_id": "2026-10-21-xxxx",
-  "status": "running",
-  "step_count": 4,
-  "pending": null,
-  "final": null,
-  "goal": "...",
-  "context": ["references/datalake_dictionary.md"],
-  "skill": "usage_comparison",
-  "plan": ["step 1", "step 2"],
-  "step": 1,
-  "done": [{"step": 0, "result": "short"}],
-  "facts": ["durable fact with source ref"],
-  "open_questions": [],
-  "summary": "rolling summary of dropped turns"
+  "run_id": "20261028-…", "status": "awaiting_approval", "title": "…", "goal": "…", "tasks": [],
+  "inputs": ["inputs/x.xlsx"], "context": [], "toolkits": ["files", "analysis"], "skill": null,
+  "plan": ["…"], "step_count": 3, "facts": ["read_file(…) -> … [ref: read_file-1]"],
+  "pending": {"tool": "run_python", "input": {…}, "interrupt": "<LangGraph interrupt id>", "tool_call_id": "…"},
+  "final": null, "warnings": [], "results": [], "events": [{"kind": "plan", "step": 0, "ts": "…", "payload": {…}}]
 }
 ```
 
 ### Rules
 - Token budget per call, e.g. 6k, well below the model limit. Small models degrade with long prompts.
-- When recent turns exceed the budget, fold the oldest into `summary` with a summariser call (effort `none`).
-- After each observation, extract durable facts into `facts`, each with its `ref`.
-- Sub-tasks start with only the state and inputs they need, not the parent's history.
-- Persist `state.json` and append to `log.jsonl` after every step. Runs can resume after a crash.
+- The record is saved before every step (the graph's checks read it) and after; `log.jsonl` gets every model call,
+  tool call, review and user action. Runs resume after a crash or a refresh.
+- No secrets in either store (§6 sign-in).
 
 ---
 
-## 8. Agent loop (`loop.py`)
+## 8. The agent (`graph.py`) and the conversation driver (`loop.py`)
 
-Pattern: **plan → execute (ReAct per step) → review**. This is more reliable than open-ended ReAct on a small model.
+Pattern: **plan → execute (tool loop) → review**, more reliable than open-ended tool use on a small model. It is one
+LangChain `create_agent` graph:
 
-### Step-wise design (required by the UI)
+```
+Planner.before_agent → Choice.before_agent → model ⇄ tools → AnswerCheck.after_agent → end
+                                               ↑ RequestCheck.after_model (may send a call back to the model)
+                                                         AnswerCheck may send the answer back to the model ↑
+```
 
-The loop is a **resumable state machine**, not one long function. `run_one_step(state)`
-advances exactly one step, persists the state, and returns an `Event` describing what happened.
-Anything that needs a human (approval, `ask_user`) sets a pending field and returns,
-and the next call resumes from the saved state. Streamlit, the CLI and tests all drive the same function.
+| Part | Stock or custom | What it does |
+|---|---|---|
+| `create_agent`, `ToolNode` | stock | the model ⇄ tool loop and routing |
+| `HumanInTheLoopMiddleware` (per call) | stock | approve, or reject with a reason, each call that needs approval (`tools.needs_approval`); the card text is the request reviewer's explanation |
+| `SummarizationMiddleware` | stock | folds old messages into a summary past the budget (left out in session memory mode) |
+| `interrupt()` / `Command(resume=…)` | stock | pauses for questions (`ask_user`), suggestions and approvals; resumed by the driver |
+| SQLite checkpointer, breakpoints | stock | saves after every node; `interrupt_after` the plan, each tool call and each answer check make one invoke one step |
+| `Planner` / `Choice` | custom | plan with the session's tools and skills (`planner.md`, `make_plan`); a suggested skill or toolkit waits for the user; toolkits accepted → plan again with them |
+| `SessionPrompt` | custom | system prompt per call (rules, toolkit rules, skill or plan), only enabled tools offered, `medium` effort after a failed call |
+| `RequestCheck` | custom | before approval: disabled toolkit → ask the user; arguments valid; the tool's static check; then the request reviewer for `REVIEWED_TOOLS` |
+| `RepeatGuard` | custom | an identical repeat of a call that worked is not run again; after `MAX_REPEATS` the finisher answers from the facts |
+| `AnswerCheck` | custom | every number traces to a source (`checks.uncited_numbers`, code), then the reviewer; issues go back to the model up to `MAX_REVIEW_ROUNDS` times |
+
+### Step-wise driving (required by the UI)
+`loop.run_one_step(state, model)` runs the graph to its next breakpoint or pause and turns what happened into
+events in the conversation record (`plan`, `tool`, `precheck`, `approval`, `user`, `ask_user`, `suggest`, `review`,
+`final`, `abort`, `model_error`), then persists and returns the last event. `resolve_pending(state, approved=…,
+reason=…, answer=…, choice=…)` records the human's response and resumes the graph with `Command(resume=…)`: an
+approved request runs at once (the UI shows it as a background job), anything else with the next step. Streamlit,
+the CLI, eval and tests all drive these same functions; `run(goal, model, approve, ask, choose)` drives them to the
+end. `continue_with` starts a follow-up instruction on the same thread (earlier messages, facts, refs and work tables
+stay); `rename` names the conversation; `abort` stops it.
 
 `state["status"]`: `planning` → (`awaiting_choice` →) `running` → `awaiting_approval` | `awaiting_user` | `awaiting_choice` → `running` … → `finished` | `aborted`
-
-```python
-@dataclass
-class Event:
-    kind: str          # plan | suggest | tool | observation | final | review | approval | ask_user | error | abort
-    payload: dict
-
-def run_one_step(state) -> Event:
-    if state["status"] == "planning":
-        state["plan"] = plan(state["goal"])                      # effort: medium
-        state["status"] = "running"
-        return persist(state, Event("plan", {"plan": state["plan"]}))
-
-    if state["status"] in ("awaiting_approval", "awaiting_user"):
-        return Event(state["status"], state["pending"])          # wait for the human
-
-    if state["step_count"] >= MAX_STEPS:
-        return abort(state, "max steps reached")
-
-    reply = model.complete(build_prompt(state), effort=pick_effort(state),
-                           stop=["OBSERVATION:"])
-    action = parse_and_validate(reply)                           # repairs inside
-    state["step_count"] += 1
-
-    if action.final:
-        verdict = review(action.final, state)                    # effort: medium
-        if verdict.ok:
-            state["status"], state["final"] = "finished", action.final
-            return persist(state, Event("final", {"text": action.final}))
-        add_feedback(state, verdict.issues)
-        return persist(state, Event("review", {"issues": verdict.issues}))
-
-    if is_repeat(state, action):
-        add_feedback(state, "Repeated action; change approach.")
-    if action.tool == "ask_user":
-        state["status"], state["pending"] = "awaiting_user", action.input
-        return persist(state, Event("ask_user", action.input))
-    if TOOLS[action.tool]["risky"]:
-        state["status"], state["pending"] = "awaiting_approval", action.dict()
-        return persist(state, Event("approval", action.dict()))
-
-    obs = dispatch(action)
-    update_state(state, action, obs)                             # facts, step progress
-    return persist(state, Event("tool", {"action": action.dict(), "obs": obs}))
-
-def resolve_pending(state, approved: bool | None = None, answer: str | None = None):
-    """Called by the UI/CLI when the human responds."""
-    pending = state.pop("pending")
-    if state["status"] == "awaiting_user":
-        update_state(state, pending, {"ok": True, "result": answer})
-    elif approved:
-        update_state(state, pending, dispatch(pending))
-    else:
-        add_feedback(state, f"User rejected {pending['tool']}. Choose another approach.")
-    state["status"] = "running"
-    persist(state)
-
-def run(goal, on_event=print, approve=cli_approve, ask=cli_ask):
-    """Convenience driver for the CLI and tests."""
-    state = new_state(goal)
-    while state["status"] not in ("finished", "aborted"):
-        ev = run_one_step(state); on_event(ev)
-        if state["status"] == "awaiting_approval": resolve_pending(state, approved=approve(ev))
-        if state["status"] == "awaiting_user":     resolve_pending(state, answer=ask(ev))
-    return state
-```
 
 ### Scope confirmation
 When the goal leaves a data choice open that cannot be inferred with confidence, above all the time range (real
 data spans 13-14 years) or the resource, scenario, version or level, the agent asks once before the first data
 query, proposing the values it would use; the user confirms ("Yes, go ahead" in the UI) or corrects. The planner
-makes this the first step ("Confirm with the user: …"), the system prompt (rule 5) and `ask_user` say how, and the
+makes this the first step ("Confirm with the user: …"), the system prompt (rule 2) and `ask_user` say how, and the
 request reviewer rejects a query built on an unconfirmed open choice. A precise goal uses the documented defaults
-and does not ask. Evals answer such questions with "Yes, confirmed"; golden tasks may check `expect_ask` /
+and does not ask. The user's answer is kept whole as a fact (`USER ANSWER to: … -> …`), and answers and rejection
+reasons outrank the plan. Evals answer such questions with "Yes, confirmed"; golden tasks may check `expect_ask` /
 `max_asks`.
 
 ### Request review before approval
-Every `sql_query`, `read_file` and `run_python` request (`config.REVIEWED_TOOLS`) is checked by the reviewer
-(`action_review.md`, effort `medium`) before the user sees it: it serves the step, applies every required filter
-with the recommended values, aggregates to the level needed without scanning more than needed, does not repeat
-or re-query what an extract already gives (a check is done in Python), and the analysis logic is right. A
-rejected request goes back to the executor as feedback without asking the user (and is not counted as a repeat);
-after `MAX_ACTION_REJECTIONS` the user is asked anyway, with the reviewer's notes on the card. An approved request
-carries the reviewer's plain-language `explain`, shown on the approval card. The reviewer also gets the full SQL /
-code of earlier requests and the previous request of the same tool: a revised request's `explain` starts with
-"Changed from the previous request: …" (shown first and in bold on the card), and the approval event stores
-`previous`, which the card offers as a diff, folded by default.
-Static problems (`Tool.check`: unsafe analysis code, a missing required filter) are sent back the same way,
-before the reviewer and before the user. The result review of the final
-answer stays, for what can only be seen in results.
+Every `sql_query`, `read_file` and `run_python` request (`config.REVIEWED_TOOLS`) is checked by the request reviewer
+(`action_review.md`, effort `medium`, `graph.review_request`) before the user sees it: it serves the step, applies
+every required filter with the recommended values, aggregates to the level needed without scanning more than
+needed, does not repeat or re-query what an extract already gives (a check is done in Python), and the analysis
+logic is right. A rejected request goes back to the model in the same step (a `precheck` event) without asking the
+user; after `MAX_ACTION_REJECTIONS` the user is asked anyway, with the reviewer's notes on the card. An approved
+request carries the reviewer's plain-language `explain`, shown on the approval card. The reviewer also gets the full
+SQL / code of earlier requests and the previous request of the same tool (from the graph's own history, so a
+request sent back moments ago counts): a revised request's `explain` starts with "Changed from the previous request:
+…" (shown first and in bold on the card), and the approval event stores `previous`, which the card offers as a diff.
+Bad arguments and static problems (`Tool.check`: unsafe analysis code, a missing required filter) are sent back the
+same way, before the reviewer and before the user. The review of the final answer stays, for what can only be seen
+in results.
 
 ### Stop conditions
-`final` accepted by the reviewer · `MAX_STEPS` (default 15) · token/cost budget · repeated action ×2 · user abort.
+An answer accepted by the checks · `MAX_STEPS` tool steps per instruction (default 15, counted by the driver) ·
+repeated action (finisher, else abort) · user abort.
 
-A backend failure (model unreachable after the adapter's retries) is not a stop: `run_one_step` rolls the step back,
-records a `model_error` event, and the step can be retried (UI: Retry button; CLI: `--resume`).
+A backend failure (model unreachable after the adapter's retries, or replies that stay outside the protocol after
+the repairs) is not a stop: the step records a `model_error` event, and retrying resumes the graph from its last
+checkpoint (UI: Retry button; CLI: `--resume`). Whatever the graph saved before the failure is recorded, not redone.
 
-User abort (UI Stop) also cancels the model call in flight (`ChatModel.cancel()`; Ollama stops generating).
-`run_one_step` checks after every model call and never acts on a reply that arrives after the abort.
-
-Repeats: the first repeat of a call that succeeded marks the current plan step done (small models often
-never set `step_done`), so STATE points at the next step or the final answer. A second repeat in a row aborts,
-unless all plan steps are done and there are facts: then `finish()` makes one plain request (`finisher.md`:
-goal + facts with refs → `{"final": ...}`, effort `medium`). Its answer still goes through the reviewer and is
-marked `via: finisher`; if it is unusable, the run aborts as before.
+User abort (UI Stop) also cancels the model call in flight (`ChatModel.cancel()`); the driver never records a result
+that arrives after the abort.
 
 ---
 
 ## 9. Effort policy (`config.py`)
 
-Default to `none`. Spend `medium` only where reasoning quality changes the outcome.
+Default to `none`. Spend `medium` only where reasoning quality changes the outcome. Each role has its own copy of the
+chat model with its effort (`TextChatModel.for_role`), so the policy is the `EFFORT` table:
 
 | Call | Effort | Why |
 |---|---|---|
 | Planner | medium | Decomposition errors propagate to every step |
 | Executor step (routine tool choice) | none | Narrow, well-specified decisions |
-| Executor step after an error or repeat | medium | Recovery needs reasoning |
-| JSON repair (first 2 tries) | none | Formatting only |
-| Summariser / fact extraction | none | Compression, low risk |
+| Executor step after a failed call | medium | Recovery needs reasoning (`SessionPrompt`) |
+| JSON repair (first `MAX_REPAIRS` tries) / last try | none / medium | Formatting only, then one careful try |
+| Summarising old messages | none | Compression, low risk |
 | Reviewer | medium | The final quality gate |
 | Request review (before each approval) | medium | Catches wrong filters and needless lake load before the user is asked |
-| Finisher (stuck executor, plan done) | medium | Last chance to answer from the facts |
-| Chat mode | none | Direct chat; reasoning models think anyway |
-| Re-plan after a failed step | medium | Same as planner |
+| Finisher (repeating executor) | medium | Last chance to answer from the facts |
 
-```python
-def pick_effort(state):
-    return "medium" if state.get("last_error") or state.get("repeat_flag") else "none"
-```
-
-Log the effort and latency of every call so the policy can be tuned with data.
+Log the effort and latency of every call so the policy can be tuned with data. A native LangChain model
+(`LLM_BACKEND=langchain`) is called without an effort.
 
 ---
 
 ## 10. Prompts (`prompts/`)
 
-- **system.md**: role, protocol rules (§5), rendered tool list, "state is authoritative" note. The final shape
+- **system.md**: the agent's rules and `{{guidance}}` (toolkit rules); the tool list and the reply protocol (§5) are
+  added by the chat model, so a native LangChain model gets the same rules without the JSON format. A final answer
   may list `"tables"` as `{"name", "title"}`; they are shown under the answer as titled grids, so the answer must
-  not also write them out (rule 11), a table keeps the columns that qualify its numbers (date, version, resource,
-  unit), and SQL in an answer goes in a ```sql block, one clause per line. Rule 12: fiscal years run 1 April to
-  31 March.
+  not also write them out (rule 8), a table keeps the columns that qualify its numbers (date, version, resource,
+  unit), and SQL in an answer goes in a ```sql block, one clause per line. Rule 10: fiscal years run 1 April to
+  31 March. The user's answers and rejection reasons override the plan (rule 7).
 - **planner.md**: "Break the goal into the fewest steps: 1–7, a simple question needs one. Plain-word actions,
   not tool names." Shape-only example `{"plan": ["<step>", ...]}`. `plan()` drops copied `<step>` placeholders
   and rejects a plan made only of tool names; then the goal is the single step. It must not plan steps that
   re-check extracted data with another query, and suggests a skill only when the goal asks for what it produces.
-- **executor.md**: "Current step: {step}. Choose one tool or finish this step. Use facts in STATE."
 - **reviewer.md**: "Check FINAL against GOAL and this checklist: complete, consistent with facts,
   numbers traceable to refs, no unsupported claims. Output `{\"ok\": bool, \"issues\": [...]}`."
   It also gets the CONTEXT, the active skill's checks, and the full stored output (with the tool input) of
@@ -624,14 +597,14 @@ Log the effort and latency of every call so the policy can be tuned with data.
   the goal. Missing caveats, method notes, scope wording and unrequested checks are not problems (they cost
   review rounds in evals).
 - **action_review.md**: the request review before approval (above, §8): `{"ok", "issues", "explain"}`.
-- **Citation check** (`loop.uncited_numbers`, code, before the LLM reviewer): every number in FINAL (except dates,
+- **Citation check** (`checks.uncited_numbers`, code, before the LLM reviewer): every number in FINAL (except dates,
   periods, list markers, small counts ≤12 and years; rounding allowed) must appear in the evidence: the goal and
   earlier goals, stored outputs (`outputs/*.txt`), context docs, and what the model was shown — tool previews
   (e.g. read_file's `shape=(48, 5)`, which the stored output lacks) and the user's answers to `ask_user`.
   Stored CSV outputs are read both ways ("1,234" as one number, and every value between commas), since a row
   like `Credit risk,4,148898` would otherwise read as 4,148 and 898.
   Misses go back to the executor without an LLM call.
-- **summariser.md**: "Compress these turns into ≤5 bullets of decisions and facts. Keep refs."
+- Summaries of old messages use `SummarizationMiddleware`'s own prompt (LangChain).
 - **finisher.md**: "Write the final answer to the GOAL using only the FACTS. Cite every number as [ref]."
 
 The planner gets the enabled tools, the other toolkits and the skills (names and descriptions only) and the
@@ -664,7 +637,8 @@ Keep prompts short and literal. Show one example of valid JSON in each, as a sha
 - Writes go to `sandbox/` only. No delete, send, or network tools without explicit approval.
 - `risky=True` tools require approval in the CLI.
 - Caps: steps, total tokens, wall time, tool timeout.
-- No secrets in prompts. Load credentials from the environment, never log them.
+- No secrets in prompts, state, logs or checkpoints. The data lake sign-in is held in memory only and masked in
+  errors (§6); an API key is read from a file outside the repository (`API_KEY_FILE`).
 - Tool output is data: text inside files or observations is never treated as instructions.
 - Every number in a final output must trace to a tool `ref`, or be quoted from a context document and cited
   `[doc: <file>]` (enforced by the citation check in code, then the reviewer).
@@ -685,10 +659,11 @@ The UI holds no agent logic. It renders events and collects human input.
 
 ### Execution model
 Streamlit re-runs the whole script on every interaction. Therefore:
-- Agent state lives in `st.session_state` **and** on disk (`runs/<id>/state.json`).
-- Each rerun calls `run_one_step` once, renders the event, then calls `st.rerun()` until
-  the agent finishes or waits for a human.
-- Approvals and `ask_user` are buttons and inputs that call `resolve_pending`, then rerun.
+- The conversation lives in `st.session_state` **and** on disk (`runs/<id>/state.json` plus the graph's checkpoints).
+- With auto-run on, each rerun calls `run_one_step` once (in a background job), renders the events, then reruns
+  until the agent finishes or waits for a human. With it off, a "Next step" button does the same.
+- Approvals, questions and suggestions are buttons and inputs that call `resolve_pending`, then rerun. A rejection
+  needs a reason.
 - A step that can take long (an approved lake query can take minutes, an agent step, analysis code) runs in a
   background thread (`start_job`); every rerun meanwhile shows what is running and the elapsed time and offers no
   actions, so the same query is never started twice.
@@ -698,69 +673,33 @@ Streamlit re-runs the whole script on every interaction. Therefore:
 ### Skeleton
 
 ```python
-import streamlit as st
-from agent.loop import new_state, run_one_step, resolve_pending, load_state
-from agent.adapter import ChatModel
-
-st.set_page_config(page_title="Agent", layout="wide")
-
-@st.cache_resource
-def get_model():               # created once per server process, not per rerun
-    return ChatModel()
-
-ss = st.session_state
-ss.setdefault("state", None)
-ss.setdefault("events", [])
-ss.setdefault("autorun", True)
-
-with st.sidebar:
-    files = st.file_uploader("Inputs", accept_multiple_files=True)   # saved to sandbox/inputs
-    ss.autorun = st.toggle("Auto-run steps", value=ss.autorun)
-    run_id = st.text_input("Resume run id")
-    if st.button("Resume") and run_id:
-        ss.state, ss.events = load_state(run_id), []
-    if st.button("Stop") and ss.state:
-        ss.state["status"] = "aborted"
-
-for ev in ss.events:                                   # replay trace on every rerun
-    with st.chat_message("assistant"):
-        st.caption(ev.kind)
-        st.json(ev.payload, expanded=False)
-
-if goal := st.chat_input("Describe the task"):
-    ss.state, ss.events = new_state(goal, inputs=files), []
-    st.rerun()
+from agent.loop import new_state, run_one_step, resolve_pending, continue_with
 
 s = ss.state
+if s and needs_login():                              # this conversation's queries use this session's sign-in
+    credentials.use(s["run_id"], ss.get("lake_login"))
 if s and s["status"] == "awaiting_approval":
-    p = s["pending"]
-    st.warning(f"Approve `{p['tool']}` with {p['input']}?")
-    c1, c2 = st.columns(2)
-    if c1.button("Approve"): resolve_pending(s, approved=True);  st.rerun()
-    if c2.button("Reject"):  resolve_pending(s, approved=False); st.rerun()
-
+    if st.button("Approve"): start_job("Running", lambda: resolve_pending(s, approved=True))
+    reason = st.text_area("Why reject?")
+    if st.button("Send rejection") and reason: resolve_pending(s, approved=False, reason=reason); st.rerun()
 elif s and s["status"] == "awaiting_user":
-    if ans := st.text_input(s["pending"].get("question", "Agent question")):
-        resolve_pending(s, answer=ans); st.rerun()
-
+    if ans := st.text_input("Your answer"): resolve_pending(s, answer=ans); st.rerun()
 elif s and s["status"] in ("planning", "running"):
-    if ss.autorun or st.button("Next step"):
-        with st.status(f"Step {s['step_count'] + 1}…"):
-            ss.events.append(run_one_step(s))
-        st.rerun()
-
-elif s and s["status"] == "finished":
-    st.success("Done")
-    st.markdown(s["final"])
-    st.download_button("Download result", s["final"], file_name="result.md")
+    if ss.autorun or st.button("Next step"): start_job("Step", lambda: run_one_step(s, model))
+if goal := st.chat_input("Describe the task"):
+    if s: continue_with(s, goal)
+    else: ss.state = new_state(goal)
+    st.rerun()
 ```
 
 ### UI rules
 - **Verbose** switch (off by default; CLI `--verbose`). Off: plan, one line per step (`step_summary`: rows, shape,
   saved path, or size — never data read in), questions, approvals (details collapsed), final answer. On: thoughts,
   tool inputs, results and reviewer issues. The full trace is always in `log.jsonl` and **Model calls**.
-- Sidebar **Tools (this session)**, **Skill** (Auto = suggestions only), **Commands** (every `/name`), plugin load
-  warnings, **End session** (tools back to basic, skill to Auto, screen cleared; runs stay saved).
+- Sidebar **Tools (this session)**, **Skill** (Auto = suggestions only), **Commands** (every `/name`), **Data lake
+  sign-in** (when the lake needs it: user ID and password, Sign in checks them, Sign out forgets them; the password
+  field is cleared when sent), plugin load warnings, **End session** (tools back to basic, skill to Auto, sign-in
+  forgotten, screen cleared; runs stay saved).
 - A suggestion is a card with checkboxes: Use selected / Continue without. Accepted toolkits stay on for the session.
 - Risky tools never run without a button click, even with auto-run on. The approval card shows the reviewer's
   plain-language explanation, any reviewer notes, and the SQL formatted one clause per line (`sqlfmt`) or the code.
@@ -782,17 +721,16 @@ elif s and s["status"] == "finished":
   titled tables, numbered sources and timing; one self-contained page with inline styles and no scripts; CLI
   `--export-html`) and the analysis script (`.py`, §13; omitted with a note when nothing was read or run). They
   are built once per conversation state. (macOS may quarantine browser downloads; open with right-click > Open.)
-- Each answer shows its timing (`loop.answer_timing`): "Answered in 3 min 05 s (agent 1 min 40 s, waiting for you
+- Each answer shows its timing (`checks.answer_timing`): "Answered in 3 min 05 s (agent 1 min 40 s, waiting for you
   1 min 25 s) · 7 steps", from the instruction's start to the final event, with waiting = time between an
   approval, question or suggestion and the user's response.
 - Each request shows the files attached with it (📎 names; `first_files` and the `task` event's `files`).
 - At each accepted final answer the agent may rename the conversation (`"title"` in the final reply,
-  `loop._retitle`), unless the user renamed it (`rename` sets `title_by_user`).
+  `checks._retitle`), unless the user renamed it (`rename` sets `title_by_user`).
 - Citations: `[ref: …]` and `[doc: …]` in an answer show as numbered links ([1], [2]) to a **Sources** list under
   it (`sources.py`); each source opens to its tool, input (code/SQL) and full stored output (`run_python` tables
   as a grid, ask_user as question + answer). The stored answer and the downloads keep the plain markers.
 - Raw model replies are shown only on request (a checkbox under the model-call table), to compare models.
-- Chat mode (sidebar) talks to the model directly via `loop.chat_turn`: no plan, tools or review, so its numbers are unchecked. Chats are persisted and logged like runs (purpose `chat`).
 - With the Ollama backend, the sidebar picks one model (installed models only) for every call; effort still switches thinking.
 - Refreshing the page must not lose work: the run id is shown and runs can be resumed.
 
@@ -808,9 +746,12 @@ elif s and s["status"] == "finished":
 ## 13. Logging and audit
 
 `runs/<run_id>/log.jsonl` gets one line per event:
-`{ts, step, kind: model|tool|review|user, effort, model, prompt_tokens, latency_ms, input, output, ref}`.
-`model` is the model that answered (from the backend's optional `model_name(effort)`, else the backend name).
-This is enough to replay a run, debug failures, and evidence how a result was produced.
+`{ts, step, kind: model|tool|review|user|model_error|abort, purpose, effort, model, prompt_tokens, latency_ms, repairs,
+input, output, ref}` (session mode adds `channel`, `send`, `sent_tokens`). Model calls are logged by a LangChain
+callback (`lc_tools.ModelLog`) on every call the graph makes, with the raw reply; tool calls by the tool wrapper;
+reviews and user actions by the graph and the driver. `model` is the model that answered (the backend's optional
+`model_name(effort)`, else the backend name). The graph's checkpoints (`runs/checkpoints.sqlite`) hold every step's
+state as well. This is enough to replay a run, debug failures, and evidence how a result was produced.
 
 **Replay script** (`replay.py`; the "analysis script (.py)" download, or `cli.py --export-script RUN_ID`),
 assembled by the harness from what ran, never by the model. Plain Python with `# %%` cells (runs end to end, or
@@ -831,30 +772,37 @@ cell by cell in VS Code / Spyder / Jupyter). The analysis comes first as plain c
 
 ## 14. Testing
 
-- **FakeModel**: replays scripted replies. Covers the loop without API calls.
-- Step-machine tests: each status transition, approval accept/reject, `ask_user`, resume from `state.json`.
-- UI smoke test with `streamlit.testing.v1.AppTest` and FakeModel: a goal runs to `finished`, and an approval button appears for risky tools.
-- Protocol tests: malformed JSON, two actions, unknown tool, bad arguments, prose outside JSON.
-- Tool tests: deterministic outputs, truncation, sandbox enforcement.
-- Data lake tests: the guard rejects writes, multiple statements and unknown views; the connection refuses writes; row cap.
+- **FakeModel**: replays scripted replies per purpose. Covers the whole graph without API calls
+  (`test_loop_fake_model.py`: statuses, approvals with reasons, questions, resume from disk and in a new process,
+  repairs, repeats and the finisher, the number check, review rounds, step limit, model errors, Stop, summarising,
+  follow-ups).
+- UI smoke tests with `streamlit.testing.v1.AppTest` and FakeModel: a goal runs to `finished`, approvals, rejection
+  reasons, verbose off prints no data, data lake sign-in (wrong then right password, sign out).
+- Reply protocol tests: malformed JSON, two objects, unknown tool, disabled toolkit, repairs and their size.
+- Tool tests: deterministic outputs, truncation, sandbox enforcement, time limits.
+- Data lake tests: the guard rejects writes, multiple statements and unknown views; the connection refuses writes;
+  row cap; per-user sign-in reaches the lake and never reaches state, logs, checkpoints, prompts or errors.
 - Skill/context tests: bundled skills parse; suggestions (accept skill, accept toolkits → re-plan, decline);
   forced skill skips the planner; context inline vs listed.
-- Plugin tests: built-in toolkits and basic set; only enabled tools in the prompt; /commands; a plugin file is
-  discovered (the `_example_toolkit.py` template works when copied); broken plugins are reported; mid-run
-  suggestion; file tools refuse lake storage. UI: verbose off prints no data; /commands persist until End session.
-- Backend tests without network: Ollama against a local stand-in server, Claude CLI against a fake `claude` script.
-- Golden tasks: 5–10 representative goals with expected facts. Re-run after prompt or policy changes.
+- Plugin tests: built-in toolkits and basic set; only enabled tools offered; /commands; a plugin file is discovered
+  (the `_example_toolkit.py` template works when copied); broken plugins are reported; mid-run suggestion; file
+  tools refuse lake storage.
+- Backend tests without network: Ollama against a local stand-in server, Claude CLI against a fake `claude` script,
+  an OpenAI-compatible stand-in server (`api`), a native LangChain model with tool calling (`langchain`), the
+  session memory stand-in.
+- Golden tasks (`eval.py`): representative goals with expected facts. Re-run after prompt, policy, model or
+  framework changes.
 
 ---
 
-## 15. Build order
+## 15. Build order (how this was built; also the order to read it)
 
-1. `adapter.py` plus a smoke test against the real module.
-2. `protocol.py` plus tests.
-3. `tools.py` with `read_file`, `calc`, `ask_user`, `write_file`.
-4. `memory.py` (state, prompt builder, persistence).
-5. `loop.py` as the step machine (`run_one_step`, `resolve_pending`), tested with FakeModel, plus `cli.py`.
-6. Add planner and reviewer, then the effort policy.
-7. `app.py` Streamlit UI on top of the step machine: trace, approvals, uploads, resume.
-8. Add `recall`, domain tools, and golden-task evaluation.
-9. Optional: background worker for long runs; parallel sub-agents (one orchestrator instance per sub-task, merged by the parent).
+1. `adapter.py` and a backend, plus `smoke_model.py` against the real module.
+2. `chat_model.py` (reply protocol, repairs) plus tests.
+3. `tools.py` and the toolkits; `lc_tools.py` turns them into LangChain tools.
+4. `graph.py`: `create_agent` with the stock middleware, then the custom middleware one by one, each with a
+   FakeModel test.
+5. `loop.py`: the driver and the conversation record, plus `cli.py`.
+6. `app.py` on top of the driver: trace, approvals, uploads, sign-in, resume.
+7. Skills, golden-task evaluation, replay and export.
+8. Optional: background worker for long runs; parallel sub-agents (LangGraph subgraphs).

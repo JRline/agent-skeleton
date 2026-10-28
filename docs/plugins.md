@@ -45,6 +45,8 @@ Rules:
   `timeout_s=lambda: <seconds>` to `@tool` (as `sql_query` does with `config.SQL_TIMEOUT_S`).
 - Keep previews small (the model sees `preview`, truncated); put full data in `full` or a work table.
 - Use only the standard library and the packages in `requirements.txt` (production is closed).
+- Write plain `@tool` functions: the agent turns every registered tool into a LangChain tool by itself
+  (`agent/lc_tools.py`), so a toolkit never imports LangChain or LangGraph.
 - Synthetic data only, in code, tests and `sandbox/`.
 
 ## Skill contract (`plugins/skills/<name>.md`, no code)

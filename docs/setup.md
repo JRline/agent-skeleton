@@ -4,7 +4,9 @@ How to install and run the agent in its three stages, and every setting. For wha
 
 ## Stage 1: FakeModel on your Mac
 
-Use the same Python minor version as production (check with `python3 --version` there).
+Use the same Python minor version as production (check with `python3 --version` there). `requirements.txt` includes
+LangGraph and LangChain (pinned), which pull in about 20 more packages; all must be on the closed environment's
+mirror.
 
 ```bash
 cd agent-skeleton
@@ -21,14 +23,15 @@ streamlit run app.py                              # opens http://localhost:8501
 Run `streamlit` from the project folder so it picks up `.streamlit/config.toml`, which keeps the UI
 on this machine only (`server.address = "localhost"`) and turns off Streamlit's usage statistics.
 
-The demo (`LLM_BACKEND=fake`, the default) reads `sandbox/inputs/sample_capital.csv`, calls the
-`capital_ratio` tool, asks you to approve writing `summary.md`, then finishes after review.
+The demo (`LLM_BACKEND=fake`, the default) reads `sandbox/inputs/sample_capital.csv`, asks you to approve one
+analysis run (`run_python`), then finishes after review.
 In the UI, try Reject as well as Approve, the Stop button, and resuming a run from the sidebar.
 
 Each run leaves an audit trail in `runs/<run_id>/`:
-- `state.json`: full state, used for resume
+- `state.json`: the conversation record (status, plan, facts, events), shown by the UI and exports
 - `log.jsonl`: every model call (purpose, effort, latency, output) and tool call
 - `outputs/<ref>.txt`: full tool outputs referenced by the model
+and `runs/checkpoints.sqlite` holds the LangGraph checkpoints every run resumes from.
 
 ## Stage 2: local model with Ollama
 
@@ -44,7 +47,7 @@ export OLLAMA_MODEL=qwen3:4b
 # thinking is off for effort "none" and on for "medium" by default; OLLAMA_THINK=0 leaves the model's default
 # export OLLAMA_THINK=never   # thinking off for every effort (qwen3.5 otherwise overthinks careful calls)
 
-python smoke_model.py --backend ollama     # does the model follow the JSON protocol?
+python smoke_model.py --backend ollama     # does the model follow the JSON reply protocol?
 python cli.py "Compute the latest capital ratio from inputs/sample_capital.csv"
 streamlit run app.py                        # pick "ollama" in the sidebar
 ```
@@ -57,7 +60,7 @@ In the UI sidebar, with Backend `ollama`:
   **New conversation** clears the screen; the conversation stays saved and can be reopened.
 
 What to look at in this stage:
-- How often replies need repair (`attempts` in the trace, `log.jsonl`).
+- How often replies need repair (`attempts` in the trace, `repairs` in `log.jsonl`).
 - Whether the planner produces usable steps, and whether the reviewer catches unsupported numbers.
 - Latency per effort level (the "Model calls" table in the UI).
 - Tune prompts in `agent/prompts/` and limits in `agent/config.py`, then rerun the tests.
@@ -76,6 +79,21 @@ python cli.py --backend claude "Show DemoBank's CET1 ratio trend"
 streamlit run app.py                        # Backend "claude", Model Haiku 5.5 or Sonnet 5.5
 ```
 `CLAUDE_MODEL` picks the model (default `claude-haiku-5-5`); `CLAUDE_CLI` overrides the binary path.
+
+### Stage 2c: a real model behind an API
+
+When a real API is provided, the swap is a setting; nothing else changes.
+- **OpenAI-compatible chat API** (standard library, the same JSON protocol as production):
+  ```bash
+  export LLM_BACKEND=api
+  export API_URL=https://llm.example.internal/v1  API_MODEL=<model>  API_KEY_FILE=~/.config/agent/api_key
+  # optional: API_MODEL_MEDIUM=<bigger model>  API_EFFORT_PARAM=reasoning_effort
+  python smoke_model.py --backend api
+  ```
+  Keep the key in a file outside the repository (`API_KEY_FILE`); `API_KEY` also works.
+- **Any LangChain chat model** (native tool calling, no JSON protocol): install and get approval for its provider
+  package (for example `langchain-openai`), then `LLM_BACKEND=langchain LC_MODEL=openai:<model>` with the provider's
+  own settings (its key variable). Effort levels are not passed to a native model.
 
 ## Stage 3: production (closed environment)
 
@@ -102,18 +120,22 @@ streamlit run app.py                        # Backend "claude", Model Haiku 5.5 
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LLM_BACKEND` | `fake` | `fake`, `ollama`, `claude` or `prod` |
+| `LLM_BACKEND` | `fake` | `fake`, `ollama`, `claude`, `api`, `langchain` or `prod` |
 | `PROD_API_MODULE` | `existing_api_module` | module imported for `prod` |
+| `API_URL`, `API_MODEL`, `API_MODEL_MEDIUM`, `API_KEY_FILE` (or `API_KEY`), `API_EFFORT_PARAM`, `API_TIMEOUT_S` | | `api` backend: see `agent/backends/openai_api.py` |
+| `LC_MODEL` | | `langchain` backend: `provider:model` for `init_chat_model` |
 | `MODEL_MEMORY` | `off` | `session`: the backend keeps one memory per channel, so fixed prompt parts are sent once (docs/design.md §4a); needs a `call(text, effort, channel)` module |
 | `MEMORY_REFRESH_TOKENS` | `20000` | session mode: re-send everything after this much text |
 | `SIM_INNER`, `SIM_MEMORY_TOKENS` | `agent.backends.claude_cli`, `24000` | production stand-in (`agent/backends/session_sim.py`): inner model and memory size before compression |
 | `CLAUDE_MODEL`, `CLAUDE_CLI` | `claude-haiku-5-5`, auto | see `agent/backends/claude_cli.py` |
 | `DATALAKE` | `sqlite` | `sqlite` (in-process synthetic), `agent.backends.datalake_mock` (mock lake server) or a production lake module |
 | `MOCK_LAKE_URL`, `MOCK_LAKE_TOKEN` | `http://127.0.0.1:8765`, none | client settings for the mock lake server |
+| `MOCK_LAKE_LOGIN` / `MOCK_LAKE_USERS` | off / none | client: `1` = each user signs in; server: `user:password,...` test accounts |
+| `LAKE_ODBC` | example string | ODBC template: driver, server, port, database (no user or password: those come from the sign-in) |
 | `DATALAKE_VIEWS` | (all) | optional comma-separated allowlist of views |
 | `AGENT_PLUGINS` | `plugins/` | plugin folder (tools/*.py, skills/*.md) |
 | `BASIC_TOOLKITS` | (marked basic) | comma-separated toolkits on when a session starts |
-| `AGENT_MAX_STEPS` | `15` | executor steps per run |
+| `AGENT_MAX_STEPS` | `15` | tool steps per instruction |
 | `SQL_TIMEOUT_S` | `900` | longest a lake query may run (15 minutes) |
 | `TOOL_TIMEOUT_S` | `30` | time limit for every other tool call |
 | `AGENT_HOME` | project folder | where `runs/` and `sandbox/` live |

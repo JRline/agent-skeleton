@@ -10,7 +10,7 @@ Setup and settings are in `docs/setup.md`; the design is in `docs/design.md`.
 
 | You change (per environment, no approval needed) | Stays fixed (change only with the owner's approval) |
 |---|---|
-| Skills: `plugins/skills/*.md` | The step machine and guardrails: `agent/` |
+| Skills: `plugins/skills/*.md` | The LangGraph agent and guardrails: `agent/` |
 | Toolkits: `plugins/tools/*.py` and their tests | Prompts: `agent/prompts/*.md` |
 | Planner worked examples: `plugins/examples/planner.md` | The UI and CLI: `app.py`, `cli.py` |
 | Data dictionary: `sandbox/references/datalake_dictionary.md` | Packages: `requirements.txt` (production is closed) |
@@ -119,12 +119,13 @@ Useful files in `runs/<run id>/`: `log.jsonl` (every model and tool call, with p
 | `PROD_API_MODULE` | your wrapper module | Module with `call(text, effort) -> str` (copy `agent/backends/prod_template.py`) |
 | `MODEL_MEMORY` | `session` if the wrapper has `channel` | Send fixed prompt parts once per instance (docs/design.md §4a); `off` sends everything each call |
 | `MEMORY_REFRESH_TOKENS` | `20000` | Session mode: re-send everything after this much text (lower it if answers drift after compression) |
-| `DATALAKE` | your lake module | Module with a read-only connection (copy `agent/backends/datalake_odbc_template.py`) |
+| `DATALAKE` | your lake module | Module with a read-only connection (copy `agent/backends/datalake_odbc_template.py`; each user signs in with their own ID and password, which the module gets as `connect(login=...)`) |
+| `LAKE_ODBC` | your driver, server, port, database | The ODBC template's connection string without the sign-in (UID/PWD are added from the user's sign-in) |
 | `DATALAKE_VIEWS` | `view1,view2` | Optional allowlist of views the agent may query |
 | `AGENT_HOME` | project folder | Where `runs/`, `sandbox/` and `settings/` live |
 | `AGENT_PLUGINS`, `AGENT_SKILLS`, `AGENT_EXAMPLES` | default `plugins/...` | Point to another folder of skills, tools or examples |
 | `BASIC_TOOLKITS` | e.g. `files,analysis,datalake,docs` | Toolkits on when a session starts |
-| `AGENT_MAX_STEPS` | `15` | Executor steps per run before it stops |
+| `AGENT_MAX_STEPS` | `15` | Tool steps per instruction before it stops |
 | `SQL_TIMEOUT_S` | `900` | Longest a lake query may run (15 minutes); set the lake driver's timeout to match |
 | `TOOL_TIMEOUT_S` | `30` | Time limit for every other tool call |
 
@@ -142,3 +143,5 @@ Check that `python smoke_model.py --backend prod` passes after any change to the
 | The reviewer keeps rejecting a good answer | `review` events | Check the cited outputs hold the numbers; a skill check may be too strict |
 | A plugin does not appear | UI warning "Plugin not loaded" | The import error is shown; fix and restart |
 | Every call fails | `smoke_model.py --backend prod` | The wrapper module or the API; nothing in skills |
+| "Not signed in to the data lake" / "Sign-in failed" | the sidebar's Data lake sign-in | Sign in again (sign-ins are memory only and end with the session); check the lake account |
+| A run stopped with "Model call failed" and resumes oddly | `runs/checkpoints.sqlite`, `log.jsonl` | Retry resumes from the last checkpoint; deleting the run folder alone does not reset a thread (start a new conversation) |

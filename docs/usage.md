@@ -21,7 +21,7 @@ How a session works, the tools and skills, the data lake and attachments, and th
 - **Add your own**: Python toolkits in `plugins/tools/`, Markdown skills in `plugins/skills/`. See `docs/plugins.md`
   (also the contract coding agents follow).
 - **Prompt settings** (sidebar, collapsed): a role/persona, an answer style, and (advanced) the system,
-  planner, reviewer, finisher and summariser templates with Reset. Saved in `settings/prompts.json`. An edited
+  planner, request check, reviewer and finisher templates with Reset. Saved in `settings/prompts.json`. An edited
   template must keep every `{{placeholder}}`. Guardrails live in code, so prompt edits can't remove them.
 
 ## Analysis: data lake, attachments and skills
@@ -30,12 +30,19 @@ How a session works, the tools and skills, the data lake and attachments, and th
   `describe_dataset` and `sql_query` (one read-only SELECT; the result is saved as a work table in
   `sandbox/work/<run_id>/`). Nothing is ever loaded, uploaded or written to the lake, and attached files are
   never part of it: they are local inputs, read with `read_file` / `run_python`. In production it is a remote lake
-  over ODBC: copy `agent/backends/datalake_odbc_template.py`, fill it in, and set `DATALAKE=<module>`.
-  Writes are refused twice: by `check_select` and by the read-only connection (account).
+  over ODBC: copy `agent/backends/datalake_odbc_template.py`, set `LAKE_ODBC` (driver, server, database), and set
+  `DATALAKE=<module>`. Writes are refused twice: by `check_select` and by the read-only connection (account).
+- **Data lake sign-in**: a lake that needs your own login shows **Data lake sign-in** in the sidebar (with the
+  datalake toolkit on). Enter your user ID and password and press **Sign in**; the agent checks them with one call
+  to the lake. They stay in the app's memory for your browser session only: never saved, logged or sent to the
+  model, and masked in any error. **Sign out** or **End session** forgets them. Until you sign in, lake tools tell
+  the agent to ask you to. CLI: `--lake-user <id>` (the password is asked without echo). Try it locally:
+  `MOCK_LAKE_USERS=analyst:secret python mock_lake/server.py`, then `MOCK_LAKE_LOGIN=1
+  DATALAKE=agent.backends.datalake_mock streamlit run app.py`.
   Locally, the synthetic lake data is in `mock_lake/data/` (outside the sandbox, so file tools can't see it):
   - `DATALAKE=sqlite` (default): an in-process, read-only SQLite copy. Used by the tests.
   - **Mock lake server**, closer to production: a separate process the agent reaches over HTTP, read-only on the
-    server side, with optional token and simulated latency (see `mock_lake/server.py`). In one terminal
+    server side, with optional per-user sign-in or token and simulated latency (see `mock_lake/server.py`). In one terminal
     `python mock_lake/server.py`, then start the agent with `DATALAKE=agent.backends.datalake_mock`.
   - What each view means is in `sandbox/references/datalake_dictionary.md`, a reference document the skills cite.
     `describe_dataset` returns a view's full entry (grain, required filters, calendar, hierarchies, measures).

@@ -2,8 +2,10 @@
 
 A small, auditable Python agent for a text-only model (production: the GPT CLI, effort `none`/`medium`).
 
-The model only produces text. Python runs the loop, the tools, memory, validation and logging.
-The backend is swappable with one setting, so the same code runs in three places:
+The model only produces text. The agent runs on **LangGraph / LangChain** (one `create_agent` graph: the tool loop,
+approvals, pauses, checkpoints); Python adds the domain checks, the tools and a chat model that gives a text-only API
+tool calling. The backend is swappable with one setting, so the same code runs in three places (and on any real
+OpenAI-compatible API with `LLM_BACKEND=api`, or any LangChain chat model with `LLM_BACKEND=langchain`):
 
 | Stage | Backend | Where | Purpose |
 |---|---|---|---|
@@ -42,16 +44,18 @@ Details in `docs/design.md` §3. The map:
 ```
 app.py, cli.py, eval.py, smoke_model.py   entry points: UI, terminal, golden-task evals, backend check
 results_page.py, sources.py               UI helpers: result tables, numbered sources under an answer
-agent/        the framework (fixed): loop.py step machine · memory.py state, logs, prompt building ·
-              protocol.py JSON actions and repair · tools.py tool registry and sandbox · plugins.py loader ·
-              datalake.py read-only SQL guard · pysandbox.py isolated model-written code · config.py
-agent/prompts/      planner, executor (system), request check, reviewer, finisher, summariser
+agent/        the framework (fixed): graph.py the LangGraph agent · loop.py step-by-step driver and state.json ·
+              chat_model.py JSON tool calls for a text-only model · checks.py number check and reviewers' inputs ·
+              tools.py tool registry and sandbox · lc_tools.py tools for LangChain · plugins.py loader ·
+              datalake.py read-only SQL guard · credentials.py lake sign-in (memory only) ·
+              pysandbox.py isolated model-written code · config.py
+agent/prompts/      planner, executor (system), request check, reviewer, finisher
 agent/toolkits/     built-in tools: files, analysis (run_python), datalake (SQL), docs
-agent/backends/     models (fake, ollama, claude, prod template) and data lakes (mock, ODBC template)
+agent/backends/     models (fake, ollama, claude, api, prod template) and data lakes (mock, ODBC template)
 plugins/      per environment: skills/, tools/, examples/ (planner worked examples)
 sandbox/      the only files tools may touch: inputs/, references/ (data dictionary), outputs/, work/
 tests/        unit tests (FakeModel, no network) · tests/golden/ eval tasks
 docs/         all documentation (index: docs/README.md) · gpt_prompts/ (used by scripts/gpt_pack.py)
 mock_lake/    synthetic data lake for local runs
-runs/         one folder per conversation: state.json, log.jsonl, outputs (git-ignored)
+runs/         one folder per conversation: state.json, log.jsonl, outputs; checkpoints.sqlite (git-ignored)
 ```
