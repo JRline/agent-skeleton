@@ -10,7 +10,7 @@ import pandas as pd
 from agent import config, replay
 from agent.backends.fake import FakeModel
 from agent.loop import run
-from mock_lake import server
+from scripts import mock_lake_server as server
 
 from tests.helpers import STD, OK, PLAN, TempDirs, j
 
@@ -51,7 +51,8 @@ class Replay(TempDirs):
         self.assertEqual(self.state["status"], "finished")
 
     def serve_lake(self):
-        srv = server.serve(0, config.datalake_dir(), quiet=True)
+        from agent import connectors
+        srv = server.serve(0, connectors.enabled()["sample_lake"].path("data"), quiet=True)   # follows copy_lake
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         self.addCleanup(srv.server_close)
         self.addCleanup(srv.shutdown)

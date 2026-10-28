@@ -90,7 +90,7 @@ def check_code(code: str) -> str | None:
 def _sandbox_file(path: str) -> Path:
     from .tools import ToolError, sandbox_path
     full = sandbox_path(path)
-    lake = config.datalake_dir().resolve()
+    lake = config.connectors_dir().resolve()
     if full == lake or lake in full.parents:
         raise ToolError(f"{path} is data lake storage: query it with sql_query and pass the saved table.")
     if not full.is_file():
@@ -111,7 +111,7 @@ def run_code(code: str, tables: dict[str, str], run_id: str, save_as: str) -> di
     from . import tablecache                 # parsed once per file version; the subprocess loads pickles
     files = {name: str(tablecache.pickle_for(full) or full) for name, full in files.items()}
     job = {"code": code, "tables": files, "cache": _precache_reads(code), "root": str(config.SANDBOX_DIR.resolve()),
-           "lake": str(config.datalake_dir().resolve()), "max_rows": config.PY_MAX_ROWS,
+           "lake": str(config.connectors_dir().resolve()), "max_rows": config.PY_MAX_ROWS,
            "allowed_modules": sorted(ALLOWED_MODULES), "banned_submodules": sorted(_BANNED_SUBMODULES),
            "cpu_seconds": config.PY_TIMEOUT_S, "workbook_module": str(Path(__file__).with_name("workbook.py")),
            "internal_modules": sorted(_INTERNAL_MODULES)}

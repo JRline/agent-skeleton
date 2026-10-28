@@ -14,8 +14,8 @@ Every document for this project, by who needs it. Start with the first row that 
 | Document | What it covers |
 |---|---|
 | [maintenance.md](maintenance.md) | Step-by-step procedures: add or update a skill, a toolkit, a data source, planner examples, golden tasks; diagnose a run; production settings; troubleshooting |
-| [datasource_entry.md](datasource_entry.md) | The exact format of a data-source entry in the data dictionary, and its rules |
-| [plugins.md](plugins.md) | The contract for skills, toolkits and planner examples: format, safety rules, tests |
+| [dataset_entry.md](dataset_entry.md) | The exact format of a dataset file (one per table or view), and its rules |
+| [extensions.md](extensions.md) | The contract for connectors, datasets, skills, toolkits and planner examples: format, safety rules, tests |
 | [gpt_prompts/](gpt_prompts/) | The prompts `scripts/gpt_pack.py` sends to the GPT CLI (one per maintenance task) |
 
 ## For understanding the design
@@ -27,10 +27,10 @@ Every document for this project, by who needs it. Start with the first row that 
 ## For coding agents
 
 [`CLAUDE.md`](../CLAUDE.md) at the project root: the rules any coding assistant must follow, recipes for common changes,
-and the current status. It points back to [plugins.md](plugins.md) and [design.md](design.md).
+and the current status. It points back to [extensions.md](extensions.md) and [design.md](design.md).
 
 ## Where else documentation lives
 
 - [`README.md`](../README.md): what the project is, a quick start, and a map of these documents.
-- [`plugins/README.md`](../plugins/README.md): a short note on the plugin folders.
-- `sandbox/references/datalake_dictionary.md`: the data dictionary itself (read by the agent at run time).
+- [`extensions/README.md`](../extensions/README.md): a short note on the extension folders and their templates.
+- `extensions/connectors/<name>/datasets/*.md`: the dataset files themselves (read by the agent at run time).

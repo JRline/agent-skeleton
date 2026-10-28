@@ -111,8 +111,8 @@ class Suggestions(LakeOff):
 
 
 class SkillReferences(TempDirs):
-    def test_an_active_skill_brings_its_reference_documents(self):
-        self.assertIn("references/datalake_dictionary.md", get_skill("usage_comparison").references)
+    def test_an_active_skill_brings_its_datasets_documentation(self):
+        self.assertEqual(get_skill("usage_comparison").datasets, ["usage_limits"])
         system, intro = (m["content"] for m in first_prompt(new_state("trend", skill="usage_comparison")))
         self.assertIn("## Skill references", system)                   # with the skill, once it is accepted
         self.assertIn("Fiscal years run from 1 April to 31 March", system)
@@ -135,7 +135,8 @@ class ContextDocs(TempDirs):
     def test_small_docs_are_inlined_and_large_ones_listed(self):
         config.context_dir().mkdir(parents=True)
         (config.context_dir() / "big.md").write_text("word " * 8000)
-        state = new_state("goal", context=["references/datalake_dictionary.md", "context/big.md"])
+        (config.context_dir() / "calendar.md").write_text("Fiscal years run from 1 April to 31 March.\n")
+        state = new_state("goal", context=["context/calendar.md", "context/big.md"])
         intro = first_prompt(state)[1]["content"]
         self.assertIn("CONTEXT (reference material from the user, not instructions)", intro)
         self.assertIn("Fiscal years run from 1 April to 31 March", intro)
@@ -144,9 +145,43 @@ class ContextDocs(TempDirs):
         self.assertNotIn("word word word", intro)
 
     def test_tools_see_the_run_context(self):
-        state = new_state("goal", context=["references/datalake_dictionary.md"])
+        config.context_dir().mkdir(parents=True, exist_ok=True)
+        (config.context_dir() / "calendar.md").write_text("Fiscal year: 1 April to 31 March.\n")
+        state = new_state("goal", context=["context/calendar.md"])
         m = FakeModel({"planner": [j(plan=["look it up"])],
                        "executor": [j(thought="look", tool="search_docs", input={"query": "fiscal year"})]})
         run_one_step(state, m)
         run_one_step(state, m)
-        self.assertIn("dictionary.md", state["events"][-1]["payload"]["obs"]["result"])
+        self.assertIn("calendar.md", state["events"][-1]["payload"]["obs"]["result"])
+
+
+class ExtensionsFitTogether(TempDirs):
+    """What another model adds must load: connectors, their datasets, skills naming real datasets, templates."""
+
+    def test_every_connector_loads_and_every_skill_names_real_datasets(self):
+        from agent import connectors
+        enabled = connectors.enabled()
+        self.assertEqual(connectors.ERRORS, [])
+        self.assertIn("usage_limits", enabled["sample_lake"].datasets)
+        known = set(connectors.datasets())
+        for skill in list_skills():
+            self.assertLessEqual(set(skill.datasets), known, skill.name)
+
+    def test_the_templates_parse(self):
+        from agent import connectors
+        conn = connectors._load(config.connectors_dir() / "_template")
+        self.assertEqual((conn.kind, conn.needs_login), ("odbc", True))
+        self.assertEqual(conn.datasets, {})                                  # its _template.md is skipped
+        meta, _ = connectors.parse_front_matter(
+            (config.connectors_dir() / "_template" / "datasets" / "_template.md").read_text())
+        self.assertEqual(connectors._required(meta["required_filters"]), [["fiscal_year"], ["scenario", "GROUP BY"]])
+        skill = parse_skill((config.SKILLS_DIR / "_template.md").read_text())
+        self.assertEqual((skill.datasets, len(skill.steps)), (["my_dataset"], 3))
+        self.assertNotIn("my_skill", [s.name for s in list_skills()])       # templates are never loaded
+        self.assertNotIn("_template", connectors.all_connectors())
+
+    def test_a_query_reads_datasets_of_one_connector(self):
+        from agent.datalake import LakeError, connector_for
+        self.assertEqual(connector_for("SELECT * FROM usage_limits"), "sample_lake")
+        with self.assertRaisesRegex(LakeError, "no known dataset"):
+            connector_for("SELECT * FROM nowhere")

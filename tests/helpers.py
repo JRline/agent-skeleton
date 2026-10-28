@@ -7,23 +7,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent import config
-from mock_lake import generate_view
-from mock_lake.samples import write_samples
+from agent import config, connectors
+from scripts.sample_inputs import write_samples
 
-LAKE = Path(__file__).resolve().parent.parent / "mock_lake" / "data"
-DICTIONARY = Path(__file__).resolve().parent.parent / "sandbox" / "references" / "datalake_dictionary.md"
+LAKE = config.connectors_dir() / "sample_lake" / "data"     # the sample connector's synthetic data
 
-
-if not (LAKE / "usage_limits.csv").exists():      # data is never committed: build it once from the seed
-    generate_view.write(LAKE / "usage_limits.csv")
+connectors.build_samples()                          # data is never committed: build it once from the seed
 
 
 class TempDirs(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.mkdtemp()
-        self._saved = (config.RUNS_DIR, config.SANDBOX_DIR, config.SETTINGS_DIR, config.LAKE_DATA_DIR)
-        config.LAKE_DATA_DIR = LAKE        # read-only: tests that change lake data copy it (copy_lake)
+        self._saved = (config.RUNS_DIR, config.SANDBOX_DIR, config.SETTINGS_DIR)
+        connectors.OVERRIDES.clear()       # the sample data is read-only: tests that change it copy it (copy_lake)
         config.RUNS_DIR = Path(self._tmp) / "runs"
         config.SETTINGS_DIR = Path(self._tmp) / "settings"
         config.SANDBOX_DIR = Path(self._tmp) / "sandbox"
@@ -32,17 +28,17 @@ class TempDirs(unittest.TestCase):
         datalake._META.clear()
         tablecache.clear_memory()
         write_samples(config.inputs_dir())
-        config.datalake_dictionary().parent.mkdir(parents=True)
-        shutil.copy(DICTIONARY, config.datalake_dictionary())
 
     def copy_lake(self) -> Path:
         """A private copy of the lake data, for a test that changes it."""
-        config.LAKE_DATA_DIR = Path(self._tmp) / "lake"
-        shutil.copytree(LAKE, config.LAKE_DATA_DIR)
-        return config.LAKE_DATA_DIR
+        copy = Path(self._tmp) / "lake"
+        shutil.copytree(LAKE, copy)
+        connectors.OVERRIDES["sample_lake"] = {"data": str(copy)}
+        return copy
 
     def tearDown(self):
-        config.RUNS_DIR, config.SANDBOX_DIR, config.SETTINGS_DIR, config.LAKE_DATA_DIR = self._saved
+        config.RUNS_DIR, config.SANDBOX_DIR, config.SETTINGS_DIR = self._saved
+        connectors.OVERRIDES.clear()
         shutil.rmtree(self._tmp, ignore_errors=True)
 
 

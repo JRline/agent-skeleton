@@ -5,7 +5,7 @@ THE REQUEST:
 {request}
 
 RULES (from the contract below; do not break them):
-- Reply with two complete files in fenced blocks: `plugins/tools/<name>.py` and `tests/test_plugin_<name>.py`,
+- Reply with two complete files in fenced blocks: `extensions/toolkits/<name>.py` and `tests/test_ext_<name>.py`,
   then a short list of what you changed and why.
 - Standard library plus pydantic, pandas and openpyxl only. Import from `agent.tools` only; do not change any
   other part of the project.

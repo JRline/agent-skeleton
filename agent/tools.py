@@ -243,6 +243,6 @@ def dispatch(name: str, args: dict, ctx: ToolContext, ref: str) -> dict:
 
 
 # Toolkits are loaded last: they import the registry and helpers defined above.
-from .plugins import load as _load_plugins  # noqa: E402
+from .extensions import load as _load_plugins  # noqa: E402
 
 _load_plugins()

@@ -19,15 +19,15 @@ class GptPack(TempDirs):
         for task in gpt_pack.TASKS:
             self.assertIn("{request}", (ROOT / "docs" / "gpt_prompts" / f"{task}.md").read_text(), task)
 
-    def test_skill_pack_carries_contract_tools_example_and_dictionary(self):
+    def test_skill_pack_carries_contract_tools_example_and_datasets(self):
         pack = gpt_pack.build("skill", "Compare leverage by region", like="limit_breach_analysis")
         self.assertIn("Compare leverage by region", pack)
-        for part in ("docs/plugins.md", "TOOLS THE AGENT HAS", "sql_query",
-                     "plugins/skills/limit_breach_analysis.md", "datalake_dictionary.md"):
+        for part in ("docs/extensions.md", "TOOLS THE AGENT HAS", "sql_query", "extensions/skills/_template.md",
+                     "extensions/skills/limit_breach_analysis.md", "datasets/usage_limits.md", "required_filters"):
             self.assertIn(part, pack)
 
     def test_other_packs_build(self):
-        for task in ("toolkit", "golden", "examples", "view"):
+        for task in ("toolkit", "connector", "dataset", "golden", "examples"):
             self.assertIn("THE REQUEST", gpt_pack.build(task, "x"), task)
 
     def test_diagnose_pack_shows_the_run(self):

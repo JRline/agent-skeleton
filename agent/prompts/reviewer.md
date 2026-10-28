@@ -8,7 +8,7 @@ GOAL:
 FACTS gathered from tools (with refs):
 {{facts}}
 
-OUTPUTS cited in FINAL, tables shown under it, and the view documentation (full text, use these to check numbers):
+OUTPUTS cited in FINAL, tables shown under it, and the dataset documentation (full text, use these to check numbers):
 {{cited}}
 
 FINAL (the answer under review is everything between the two marker lines, and nothing else):
@@ -23,7 +23,7 @@ REVIEW CHECKLIST (instructions for you, not part of FINAL):
 4. It makes no claims the facts do not support.
 {{checks}}
 Conventions you may rely on: fiscal years run from 1 April to 31 March.
-Judge only against the facts, the cited outputs, the view documentation and the CONTEXT; the documentation is a
+Judge only against the facts, the cited outputs, the dataset documentation and the CONTEXT; the documentation is a
 valid source for definitions, units, filter values, calendars and names (e.g. a product named from its code).
 
 Report a problem ONLY when it makes the answer wrong for the user: a number that is wrong or has no source, a

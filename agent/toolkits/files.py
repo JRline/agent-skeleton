@@ -21,7 +21,7 @@ def _user_file(path: str):
     """Sandbox path for file tools. The lake's storage is off limits: locally it is CSV files, but in
     production it is a remote lake, so reading it as files would only work on this Mac and bypass the SQL guard."""
     full = sandbox_path(path)
-    lake = config.datalake_dir().resolve()
+    lake = config.connectors_dir().resolve()
     if full.suffix.lower() == ".csv" and (full == lake or lake in full.parents):
         raise ToolError(f"{path} is data lake storage. Query it with the datalake toolkit "
                         "(sql_query; the user enables it with /datalake).")

@@ -9,7 +9,7 @@ from agent.backends.fake import FakeModel
 from agent.graph import plan
 from agent.checks import _Plan
 from agent.memory import new_state
-from agent.plugins import TOOLKITS, examples, load
+from agent.extensions import TOOLKITS, examples, load
 from agent.skills import get_skill
 
 from tests.helpers import PLAN, TempDirs

@@ -18,48 +18,49 @@ How a session works, the tools and skills, the data lake and attachments, and th
   You tick what to use ("Use selected") or "Continue without". It never enables anything by itself.
 - **Verbose** (sidebar, CLI `--verbose`): off shows only the steps (`🔧 sql_query · rows=6; …`), never data read
   in; on also shows thoughts, tool inputs, results and reviewer comments.
-- **Add your own**: Python toolkits in `plugins/tools/`, Markdown skills in `plugins/skills/`. See `docs/plugins.md`
+- **Add your own**: connectors and datasets in `extensions/connectors/`, Markdown skills in `extensions/skills/`,
+  Python toolkits in `extensions/toolkits/`. See `docs/extensions.md`
   (also the contract coding agents follow).
 - **Prompt settings** (sidebar, collapsed): a role/persona, an answer style, and (advanced) the system,
   planner, request check, reviewer and finisher templates with Reset. Saved in `settings/prompts.json`. An edited
   template must keep every `{{placeholder}}`. Guardrails live in code, so prompt edits can't remove them.
 
-## Analysis: data lake, attachments and skills
+## Analysis: connectors, datasets, attachments and skills
 
-- **Data lake** (`agent/datalake.py`): the remote, read-only data lake cluster. Tools `list_datasets`,
+- **Connectors and datasets** (`extensions/connectors/`): a connector is one read-only data source (the data lake,
+  a database, the local sample); each of its datasets (a table or view) is described by one file in its
+  `datasets/` folder, and only described datasets can be queried. Tools `list_datasets` (by connector),
   `describe_dataset` and `sql_query` (one read-only SELECT; the result is saved as a work table in
-  `sandbox/work/<run_id>/`). Nothing is ever loaded, uploaded or written to the lake, and attached files are
-  never part of it: they are local inputs, read with `read_file` / `run_python`. In production it is a remote lake
-  over ODBC: copy `agent/backends/datalake_odbc_template.py`, set `LAKE_ODBC` (driver, server, database), and set
-  `DATALAKE=<module>`. Writes are refused twice: by `check_select` and by the read-only connection (account).
-- **Data lake sign-in**: a lake that needs your own login shows **Data lake sign-in** in the sidebar (with the
-  datalake toolkit on). Enter your user ID and password and press **Sign in**; the agent checks them with one call
-  to the lake. They stay in the app's memory for your browser session only: never saved, logged or sent to the
-  model, and masked in any error. **Sign out** or **End session** forgets them. Until you sign in, lake tools tell
-  the agent to ask you to. CLI: `--lake-user <id>` (the password is asked without echo). Try it locally:
-  `MOCK_LAKE_USERS=analyst:secret python mock_lake/server.py`, then `MOCK_LAKE_LOGIN=1
-  DATALAKE=agent.backends.datalake_mock streamlit run app.py`.
-  Locally, the synthetic lake data is in `mock_lake/data/` (outside the sandbox, so file tools can't see it):
-  - `DATALAKE=sqlite` (default): an in-process, read-only SQLite copy. Used by the tests.
-  - **Mock lake server**, closer to production: a separate process the agent reaches over HTTP, read-only on the
-    server side, with optional per-user sign-in or token and simulated latency (see `mock_lake/server.py`). In one terminal
-    `python mock_lake/server.py`, then start the agent with `DATALAKE=agent.backends.datalake_mock`.
-  - What each view means is in `sandbox/references/datalake_dictionary.md`, a reference document the skills cite.
-    `describe_dataset` returns a view's full entry (grain, required filters, calendar, hierarchies, measures).
-  - The one view, `usage_limits`, is a realistic example of a usage-and-limits view: DemoBank Group's RWA and leverage
-    exposure under JFSA Basel III in JPY millions, partitioned by fiscal year in `partition_key` (`FY2025`, 1 April to
-    31 March, 244 Tokyo business days). Dimensions that must be filtered (or grouped) for correct numbers:
-    `partition_key`, `entity`, `rule`, `currency`, `scenario` (USED / ALLOC), `resource` (RWA / Leverage
-    exposure), `version` (CLOSED recommended; EARLY arrives first, some dates have CLOSED only, the newest EARLY
-    only) and `method` (BOOKED; FRTB internal-model market risk also has DAILY and the 60-day AVG60, with BOOKED =
-    max(DAILY, multiplier x AVG60)). Hierarchies as `<dimension>_generation_<n>`: measure (resource > risk type >
-    approach, JFSA OV1 / LR2), region and book (group > division > business line > product); one `amount`
-    column. No latest flag: each resource and version has its own latest date. `describe_dataset` lists the
-    partitions. Rebuild with `python mock_lake/generate_view.py`.
-  - Skills `usage_overview` (this view) and `file_summary` (any attached file) summarise data for an
+  `sandbox/work/<run_id>/`). A query reads datasets of one connector; to combine connectors, the agent queries each
+  and joins the extracts with `run_python`. Nothing is ever loaded, uploaded or written to a data source, and
+  attached files are never part of one: they are local inputs, read with `read_file` / `run_python`. Writes are
+  refused twice: by `check_select` and by the read-only connection (account). How to add one: `docs/extensions.md`.
+- **Data sign-in**: a connector that needs your own login shows **Data sign-in: <connector>** in the sidebar (with
+  the datalake toolkit on). Enter your user ID and password and press **Sign in**; the agent checks them with one
+  call to the server. They stay in the app's memory for your browser session only: never saved, logged or sent to
+  the model, and masked in any error. **Sign out** or **End session** forgets them. Until you sign in, its tools
+  tell the agent to ask you to. CLI: `--sign-in <connector>=<user id>` (the password is asked without echo). Try it
+  locally: `MOCK_LAKE_USERS=analyst:secret python scripts/mock_lake_server.py`, then
+  `CONNECTOR_SAMPLE_LAKE_KIND=mock CONNECTOR_SAMPLE_LAKE_NEEDS_LOGIN=yes streamlit run app.py`.
+- **The sample connector** `sample_lake` holds synthetic data (built by `python scripts/setup_local.py` into its
+  git-ignored `data/` folder, outside the sandbox, so file tools can't see it):
+  - by default it is `kind: sqlite`, an in-process read-only SQLite copy, used by the tests;
+  - `CONNECTOR_SAMPLE_LAKE_KIND=mock` reaches it through the **mock lake server** instead, closer to production: a
+    separate process over HTTP, read-only on the server side, with optional per-user sign-in or token and
+    simulated latency (`python scripts/mock_lake_server.py` in another terminal).
+  - Its one dataset, `usage_limits` (`datasets/usage_limits.md`), is a realistic usage-and-limits table: DemoBank
+    Group's RWA and leverage exposure under JFSA Basel III in JPY millions, partitioned by fiscal year in
+    `partition_key` (`FY2025`, 1 April to 31 March, 244 Tokyo business days). Dimensions that must be filtered (or
+    grouped) for correct numbers: `partition_key`, `entity`, `rule`, `currency`, `scenario` (USED / ALLOC),
+    `resource` (RWA / Leverage exposure), `version` (CLOSED recommended; EARLY arrives first, some dates have
+    CLOSED only, the newest EARLY only) and `method` (BOOKED; FRTB internal-model market risk also has DAILY and
+    the 60-day AVG60, with BOOKED = max(DAILY, multiplier x AVG60)). Hierarchies: measure (resource > risk type >
+    component), region and book (group > division > business line > product); one `amount` column. No latest
+    flag: each resource and version has its own latest date. `describe_dataset` lists the partitions.
+  - Skills `usage_overview` (this dataset) and `file_summary` (any attached file) summarise data for an
     analyst: what it holds, how to read or query it correctly, and its key figures.
 - **Data reads are confirmed, after a review**: before a lake query, a read of your files or analysis code is
-  shown to you, the reviewer checks it against the goal and the view's documentation (required filters,
+  shown to you, the reviewer checks it against the goal and the dataset's documentation (required filters,
   aggregation level, load on the server, logic). Problems go back to the agent without asking you (after two
   rejections you are asked anyway, with the reviewer's notes). The approval card explains in plain words what the
   request does, with the SQL formatted one clause per line. While an approved query runs, the page shows what is
@@ -67,23 +68,23 @@ How a session works, the tools and skills, the data lake and attachments, and th
 - **Vague questions are confirmed first**: when a question leaves a data choice open (above all the time range, or
   the resource, version or level), the agent proposes values and asks once before querying; **Yes, go ahead**
   confirms, or type a correction.
-- **Required filters are background, not errors**: each view's required filters and default values (data
-  dictionary `Required filter:` / `Default filters:`) are in the agent's standing guidance, and a query that still
+- **Required filters are background, not errors**: each dataset's required filters and default values (its
+  file's `required_filters` / `default_filters`) are in the agent's standing guidance, and a query that still
   misses one is sent back to the agent before you are asked, never run.
 - **Revised requests show what changed**: the card's explanation starts with the change, and a diff against the
   previous request of the same tool is shown.
 - **Layout**: your request and the answer are highlighted cards; a finished instruction folds its steps into
   "How I got here", while the current one shows its steps as they happen.
-- **Data reads ask for approval**: every lake query and every read of your files (`inputs/`) waits for your OK,
-  with the SQL shown. Reading back this conversation's own results (work tables, a repeated query) and view
-  documentation (`list_datasets`, `describe_dataset`: catalogue and dictionary, no data rows) do not ask.
+- **Data reads ask for approval**: every dataset query and every read of your files (`inputs/`) waits for your OK,
+  with the SQL shown. Reading back this conversation's own results (work tables, a repeated query) and dataset
+  documentation (`list_datasets`, `describe_dataset`: catalogue and dataset files, no data rows) do not ask.
   SQL extracts and aggregates; Python analyses the small extracts.
-- **IO cost** (lake views can hold billions of rows, input files 50k+):
-  - every lake query asks the server for at most `MAX_SQL_ROWS` + 1 rows (`LIMIT`, or the lake module's
+- **IO cost** (datasets can hold billions of rows, input files 50k+):
+  - every query asks the server for at most `MAX_SQL_ROWS` + 1 rows (`LIMIT`, or the connection kind's
     `limit_sql`); a result over the cap is refused with advice to filter and aggregate in SQL, never truncated;
-  - views, columns and samples are fetched once per `LAKE_META_TTL_S`; the same SQL in a conversation reuses its
+  - datasets, columns and partitions are fetched once per `LAKE_META_TTL_S`; the same SQL in a conversation reuses its
     saved table (`refresh: true` forces a new query);
-  - large views can be marked `Required filter: \`col\`` in the data dictionary; unfiltered queries are refused;
+  - large datasets set `required_filters` in their file; unfiltered queries are refused;
   - each file version is parsed once (`agent/tablecache.py`: memory + pickles in `sandbox/work/.cache/`);
     `read_file`, `tables`, `read_table` and literal `pd.read_*` calls in analysis code reuse it;
   - `read_file` stores `READ_FILE_STORED_ROWS` rows under its ref, not a copy of the file; the citation check
@@ -128,15 +129,15 @@ How a session works, the tools and skills, the data lake and attachments, and th
   ("E5:E8 = Dn-Bn, row by row"; formulas without saved values are flagged), a preview, and the
   `read_range(path, sheet, range, header_rows)` call that loads a block in analysis code.
 - **Conversation title**: each final answer renames the conversation from what it has become, unless you named it.
-- **Reference documents belong to skills** (`references:` in the skill file, e.g. the data dictionary): while
-  the skill is active they are the run's CONTEXT. Small ones go into the prompt; larger ones are searched
-  with `search_docs`.
-- **Skills** (`plugins/skills/*.md`): step lists written in Markdown. The agent may suggest one, or you pick it
+- **Dataset documentation and reference documents belong to skills**: once a skill is accepted, the files of its
+  `datasets:` and its `references:` (e.g. a methodology note) are in the agent's prompt. Small reference documents
+  go in whole; larger ones are searched with `search_docs`.
+- **Skills** (`extensions/skills/*.md`): step lists written in Markdown. The agent may suggest one, or you pick it
   (sidebar "Skill", `/skill_name`, CLI `--skill`). Its steps become the plan, its toolkits are enabled, and its
   checks are added to the reviewer.
-  A skill is either general or tied to one data source (front matter `source:`), and the planner only offers a
-  source's skills for questions about that source. Bundled: `file_summary` (general: any attached file);
-  for the `usage_limits` view: `usage_overview`, `usage_comparison`, `limit_breach_analysis` (finds
+  A skill is either general or written for datasets (front matter `datasets:`, from one or several connectors),
+  and the planner only offers it for questions about those datasets. Bundled: `file_summary` (general: any attached file);
+  for the `usage_limits` dataset: `usage_overview`, `usage_comparison`, `limit_breach_analysis` (finds
   limit breaches over a period and their source: a usage increase, a limit cut at a quarter reset, or the
   internal-model 60-day average) and `limit_status` (usage, limit and headroom per key at the latest
   date: is anything over its limit now). See CLAUDE.md "Add a skill".
@@ -146,7 +147,7 @@ How a session works, the tools and skills, the data lake and attachments, and th
 ## Evals (golden tasks)
 
 `tests/golden/*.json` are synthetic tasks with known answers (numbers with tolerance, keywords, tool budgets).
-`python eval.py --backend claude` (or `fake`, `ollama`, `prod`) runs them as fresh conversations, auto-approving
+`python scripts/eval.py --backend claude` (or `fake`, `ollama`, `prod`) runs them as fresh conversations, auto-approving
 and accepting suggestions, and writes `runs/evals/<time>-<backend>.json` and `.md`: score per task, failed checks,
 steps, tool calls, model calls and seconds, repairs, compared with the previous run of the same backend.
 Run it before and after every prompt, policy or model change.

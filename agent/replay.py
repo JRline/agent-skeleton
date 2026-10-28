@@ -262,7 +262,9 @@ def build_script(state: dict) -> str:
             if it["kind"] == "sql_query":
                 truncated[it["ref"]] = _truncated(state, it["ref"])
     models = sorted({e.get("model") for e in read_log(state) if e.get("kind") == "model" and e.get("model")})
-    lake = "mock" if config.DATALAKE in ("sqlite", "agent.backends.datalake_mock") else "odbc"
+    from . import connectors
+    kinds = {c.kind for c in connectors.enabled().values()}
+    lake = "mock" if kinds <= {"sqlite", "mock"} else "odbc"
     title = state.get("title") or state["run_id"]
     cells = [_header(state, title, models, items), _setup(lake, state, items)]
     answers, names, step_no = [], {}, 0
@@ -355,17 +357,20 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# Where the data comes from: "odbc" = the internal lake server (DSN in LAKE_DSN, read-only account),
-# "mock" = the local mock lake server (python mock_lake/server.py), for testing only.
+# Where the data comes from: "odbc" = the server over ODBC (connection string without the sign-in in LAKE_ODBC;
+# your user ID in ANALYSIS_USER, the password is asked), "mock" = the local mock lake server
+# (python scripts/mock_lake_server.py), for testing only.
 LAKE = os.getenv("ANALYSIS_LAKE", "{lake}")
 INPUTS = Path(os.getenv("ANALYSIS_INPUTS", {inputs!r}))   # the user's input files (attachments)
 
 
 def run_sql(sql: str) -> pd.DataFrame:
-    """One read-only SELECT on the data lake."""
+    """One read-only SELECT on a data source."""
     if LAKE == "odbc":
         import pyodbc                                          # the lake's ODBC driver must be installed
-        conn = pyodbc.connect(f"DSN={{os.environ['LAKE_DSN']}}", readonly=True, autocommit=True)
+        from getpass import getpass
+        conn = pyodbc.connect(f"{{os.environ['LAKE_ODBC']}};UID={{os.environ['ANALYSIS_USER']}};PWD={{getpass()}}",
+                              readonly=True, autocommit=True)
         try:
             cur = conn.cursor()
             cur.execute(sql)

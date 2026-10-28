@@ -1,25 +1,22 @@
-"""Read-only data lake access for the SQL tools (docs/design.md §6).
+"""Read-only SQL access to the datasets of the enabled connectors, for the SQL tools (docs/design.md §6).
 
-Production reaches the lake with SQL over ODBC: copy agent/backends/datalake_odbc_template.py, fill it in
-inside the closed environment and set DATALAKE=<module name>. Development uses either an in-memory SQLite
-copy of the synthetic CSVs in mock_lake/data/ (DATALAKE=sqlite) or the mock lake server, a separate process
-reached over HTTP (DATALAKE=agent.backends.datalake_mock), so the same tools and prompts run unchanged.
-The lake is remote and read-only: the agent never loads, uploads or writes anything to it.
+Connectors and datasets are extensions (extensions/connectors/<name>/: connector.md, datasets/*.md; loaded by
+agent/connectors). Each query runs on the one connector that holds its datasets, signed in as the user when the
+connector needs it. Data sources are remote and read-only: the agent never loads, uploads or writes anything.
 
-Two independent safety layers: `check_select` (one SELECT/WITH statement on allowed views only) and a
-read-only connection (SQLite: an authorizer that denies anything but reading; production: readonly=True and
-a read-only account). Rows are capped with fetchmany so a query can never flood the prompt.
+Two independent safety layers: `check_select` (one SELECT/WITH statement on documented datasets only) and a
+read-only connection (SQLite: an authorizer that denies anything but reading; servers: a read-only account and
+connection). Rows are capped with fetchmany so a query can never flood the prompt.
 """
 from __future__ import annotations
 
-import importlib
 import re
 import sqlite3
 import time
 
 import pandas as pd
 
-from . import config, credentials
+from . import config, connectors, credentials
 
 
 class LakeError(Exception):
@@ -37,8 +34,8 @@ def _strip(sql: str) -> str:
     return re.sub(r"'(?:[^']|'')*'", "''", sql)
 
 
-def check_select(sql: str, views: list[str]) -> str:
-    """Return the cleaned statement, or raise LakeError if it is not one read-only query on allowed views."""
+def check_select(sql: str, datasets: list[str]) -> str:
+    """Return the cleaned statement, or raise LakeError if it is not one read-only query on allowed datasets."""
     body = _strip(sql).strip().rstrip(";").strip()
     if ";" in body:
         raise LakeError("Send exactly one SQL statement.")
@@ -48,16 +45,16 @@ def check_select(sql: str, views: list[str]) -> str:
     if bad:
         raise LakeError(f"Keyword not allowed in a read-only query: {bad.group(0).upper()}.")
     ctes = {m.lower() for m in re.findall(r"(?:\bwith|,)\s*([A-Za-z_]\w*)\s+as\s*\(", body, re.I)}
-    allowed = {v.lower() for v in views}
+    allowed = {v.lower() for v in datasets}
     for name in re.findall(r"\b(?:from|join)\s+([A-Za-z_][\w.]*)", body, re.I):
         if name.lower() not in allowed | ctes:
-            raise LakeError(f"Unknown or not allowed view: {name}. Allowed: {', '.join(views)}.")
+            raise LakeError(f"Unknown or not allowed dataset: {name}. Allowed: {', '.join(datasets)}.")
     return sql.strip().rstrip(";").strip()
 
 
 def limit_sql(sql: str, n: int) -> str:
-    """Ask the server for at most n rows, so a view with billions of rows is never scanned in full for a preview.
-    Appends LIMIT (keeps ORDER BY); a query with its own LIMIT is wrapped. A lake module may supply its own
+    """Ask the server for at most n rows, so a dataset with billions of rows is never scanned in full for a preview.
+    Appends LIMIT (keeps ORDER BY); a query with its own LIMIT is wrapped. A connection kind may supply its own
     `limit_sql` for its dialect (e.g. FETCH FIRST n ROWS ONLY)."""
     if re.search(r"\blimit\s+\d+\s*$", _strip(sql), re.I):
         return f"SELECT * FROM ({sql}) AS limited_q LIMIT {n}"
@@ -65,13 +62,13 @@ def limit_sql(sql: str, n: int) -> str:
 
 
 def check_required_filters(sql: str, required: dict[str, list[list[str]]]) -> None:
-    """Large views marked in the data dictionary must be filtered on their key column (e.g. a date), so a query
+    """Large datasets marked in their dataset file must be filtered on their key column (e.g. a date), so a query
     cannot scan them in full. A keyword check like check_select, not a parser: the read-only account and the
     server's own limits remain the real protection."""
     body = _strip(sql)
     used = {m.lower() for m in re.findall(r"\b(?:from|join)\s+([A-Za-z_][\w.]*)", body, re.I)}
-    for view, groups in required.items():
-        if view.lower() not in used:
+    for dataset, groups in required.items():
+        if dataset.lower() not in used:
             continue
         grouped = re.search(r"\bgroup\s+by\b(.*?)(?:\border\s+by\b|\bhaving\b|\blimit\b|\)|$)", body, re.I | re.S)
         for options in groups:                       # each group: any one of these columns must be filtered
@@ -83,11 +80,11 @@ def check_required_filters(sql: str, required: dict[str, list[list[str]]]) -> No
                                                          for c in cols):
                 continue                             # split by it: the values are never added together
             how = " (or GROUP BY it)" if "GROUP BY" in options else ""
-            raise LakeError(f"{view} needs a filter on {' or '.join(cols)}{how} "
+            raise LakeError(f"{dataset} needs a filter on {' or '.join(cols)}{how} "
                             f"(e.g. WHERE {cols[0]} = ... or IN (...)), and aggregate in SQL.")
 
 
-_META: dict[tuple, tuple[float, object]] = {}      # (lake, kind, view) -> (time, value): one round trip per TTL
+_META: dict[tuple, tuple[float, object]] = {}      # (source, kind, dataset) -> (time, value): one round trip per TTL
 
 
 def _cached(key: tuple, make):
@@ -100,21 +97,32 @@ def _cached(key: tuple, make):
 
 
 class Lake:
-    """One read-only SQL source. `connect()` returns a DB-API connection; `views()` the queryable views.
-    Optional: `limit_sql(sql, n)` for the server's dialect."""
+    """One connector as this conversation's user sees it: its documented datasets, queries, columns, partitions."""
 
-    def __init__(self, name: str, connect, views, limit=None, source: str = "", partitions=None):
-        self.name, self.connect, self._views, self._limit = name, connect, views, limit or limit_sql
-        self.source = source or name          # identifies the server/data for the metadata cache
-        self._partitions = partitions         # partitions(view) -> list of partition values, from the catalogue
+    def __init__(self, connector: "connectors.Connector", login=None):
+        self.connector, self.login, self.module = connector, login, connector.module()
+        self.name = f"{connector.name} ({connector.kind})"
+        source = getattr(self.module, "source", lambda c: c.name)(connector)
+        self.source = f"{source}#{login.user if login else ''}"     # each user's own catalogue view
+        self._limit = getattr(self.module, "limit_sql", limit_sql)
 
-    def list_views(self) -> list[str]:
-        views = _cached((self.source, "views"), self._views)
-        return [v for v in views if v in config.DATALAKE_VIEWS] if config.DATALAKE_VIEWS else list(views)
+    def _login(self):
+        if self.connector.needs_login and self.login is None:
+            raise LakeError(f"Not signed in to {self.connector.name}: enter your user ID and password under "
+                            "'Data sign-in' (or run the CLI with --sign-in).")
+        return self.login
+
+    def connect(self):
+        return self.module.connect(self.connector, self._login())
+
+    def list_datasets(self) -> list[str]:
+        """The documented datasets the server has: a dataset file is the allowlist."""
+        found = _cached((self.source, "datasets"), lambda: self.module.list_datasets(self.connector, self._login()))
+        return [d for d in self.connector.datasets if d in found]
 
     def query(self, sql: str, max_rows: int | None = None) -> tuple[pd.DataFrame, bool]:
         """Run one checked query, limited on the server to max_rows + 1. Returns (rows, truncated)."""
-        sql = check_select(sql, self.list_views())
+        sql = check_select(sql, self.list_datasets())
         check_required_filters(sql, required_filters())
         limit = max_rows or config.MAX_SQL_ROWS
         conn = self.connect()
@@ -131,24 +139,27 @@ class Lake:
             conn.close()
         return pd.DataFrame([tuple(r) for r in rows[:limit]], columns=cols), len(rows) > limit
 
-    def describe(self, view: str) -> list[str]:
-        """Columns of a view: catalogue metadata only (a zero-row query; cached), never data rows."""
-        if view not in self.list_views():
-            raise LakeError(f"Unknown view: {view}. Use one of: {', '.join(self.list_views())}.")
-        return _cached((self.source, "columns", view), lambda: self._columns(view))
+    def describe(self, dataset: str) -> list[str]:
+        """Columns of a dataset: catalogue metadata only (a zero-row query; cached), never data rows."""
+        if dataset not in self.list_datasets():
+            raise LakeError(f"Unknown dataset: {dataset}. Use one of: {', '.join(self.list_datasets())}.")
+        return _cached((self.source, "columns", dataset), lambda: self._columns(dataset))
 
-    def partitions(self, view: str) -> list[str]:
-        """The partitions (values of config.LAKE_PARTITION_COLUMN, e.g. fiscal years) a partitioned view has, from catalogue metadata.
-        Empty when the view is not partitioned or the lake module cannot list them cheaply."""
-        if self._partitions is None or config.LAKE_PARTITION_COLUMN not in self.describe(view):
+    def partitions(self, dataset: str) -> list[str]:
+        """The partitions (e.g. fiscal years) of a partitioned dataset, from catalogue metadata. Empty when the
+        dataset is not partitioned or the connection kind cannot list them cheaply."""
+        ds = self.connector.datasets.get(dataset)
+        fn = getattr(self.module, "partitions", None)
+        if not ds or not ds.partition_column or fn is None or ds.partition_column not in self.describe(dataset):
             return []
-        return _cached((self.source, "partitions", view), lambda: sorted(self._partitions(view)))
+        return _cached((self.source, "partitions", dataset),
+                       lambda: sorted(fn(self.connector, dataset, ds.partition_column, self._login())))
 
-    def _columns(self, view: str) -> list[str]:
+    def _columns(self, dataset: str) -> list[str]:
         conn = self.connect()
         try:
             cur = conn.cursor()
-            cur.execute(self._limit(f"SELECT * FROM {view}", 0))
+            cur.execute(self._limit(f"SELECT * FROM {dataset}", 0))
             cur.fetchmany(1)
             return [d[0] for d in cur.description]
         except Exception as e:
@@ -157,138 +168,86 @@ class Lake:
             conn.close()
 
 
-# ---------------------------------------------------------------- local SQLite stand-in
-
-_READ_ONLY = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION}
-
-
-def _sqlite_views() -> list[str]:
-    return sorted(p.stem for p in config.datalake_dir().glob("*.csv"))
-
-
-_TEMPLATE: dict = {}       # the CSVs loaded once per version, copied (not re-parsed) for each connection
-
-
-def _sqlite_connect() -> sqlite3.Connection:
-    """Fresh in-memory copy of the CSVs, then locked: the authorizer denies anything but reading."""
-    files = sorted(config.datalake_dir().glob("*.csv"))
-    version = tuple((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in files)
-    if _TEMPLATE.get("version") != version:
-        template = sqlite3.connect(":memory:", check_same_thread=False)
-        for p in files:
-            pd.read_csv(p).to_sql(p.stem, template, index=False)
-        _TEMPLATE.update(version=version, conn=template)
-    conn = sqlite3.connect(":memory:")
-    _TEMPLATE["conn"].backup(conn)
-    conn.set_authorizer(lambda action, *args: sqlite3.SQLITE_OK if action in _READ_ONLY else sqlite3.SQLITE_DENY)
-    return conn
-
-
-def _sqlite_partitions(view: str) -> list[str]:
-    """Locally the 'catalogue' is the data itself; in production the lake module lists partitions from metadata."""
-    conn = _sqlite_connect()
-    try:
-        return [r[0] for r in conn.execute(f"SELECT DISTINCT {config.LAKE_PARTITION_COLUMN} FROM {view}")]
-    finally:
-        conn.close()
-
+# ---------------------------------------------------------------- datasets and their rules
 
 def required_filters() -> dict[str, list[list[str]]]:
-    """Views the data dictionary marks with `Required filter: `a` or `b`, `c` (or GROUP BY)`: every comma-separated
-    group must be filtered on any one of its columns (e.g. a date range by as_of_date or fiscal_year); a group marked
-    "(or GROUP BY)" may instead be split by in GROUP BY (e.g. one row per scenario: never added together)."""
-    out = {}
-    for view, body in view_notes().items():
-        m = re.search(r"(?im)^\s*-?\s*required filters?:\s*(.+)$", body)
-        if m:
-            groups = [(re.findall(r"`([^`]+)`", g) or [g.strip(" .")]) + (["GROUP BY"] if re.search(r"group by", g, re.I)
-                                                                          else []) for g in m.group(1).split(",")]
-            out[view] = [g for g in groups if g and g[0]]
-    return out
+    """Datasets whose file sets `required_filters`: every comma-separated group must be filtered on any one of its
+    columns (e.g. a date range by as_of_date or fiscal_year); a group marked "(or GROUP BY)" may instead be split
+    by in GROUP BY (e.g. one row per scenario: never added together)."""
+    return {name: ds.required for name, ds in connectors.datasets().items() if ds.required}
 
 
 def default_filters() -> dict[str, str]:
-    """Views the data dictionary gives a `Default filters: <WHERE condition>` line: the recommended values."""
-    out = {}
-    for view, body in view_notes().items():
-        m = re.search(r"(?im)^\s*-?\s*default filters?:\s*(.+?)\.?\s*$", body)
-        if m:
-            out[view] = m.group(1).strip()
-    return out
+    """Datasets whose file sets `default_filters` (a WHERE condition): the recommended values."""
+    return {name: ds.defaults for name, ds in connectors.datasets().items() if ds.defaults}
 
 
-def view_rules() -> str:
-    """Each view's required filters and default values, for the agent's standing guidance: the agent knows them
+def dataset_rules() -> str:
+    """Each dataset's required filters and default values, for the agent's standing guidance: the agent knows them
     before writing any SQL, instead of learning them from a refused query."""
     required, defaults = required_filters(), default_filters()
     lines = []
-    for view in sorted(set(required) | set(defaults)):
+    for name in sorted(set(required) | set(defaults)):
         groups = [" or ".join(c for c in g if c != "GROUP BY") + (" (or GROUP BY it)" if "GROUP BY" in g else "")
-                  for g in required.get(view, [])]
-        line = f"View {view}: every query must filter on " + "; ".join(groups) + "." if groups else f"View {view}:"
-        if view in defaults:
-            line += f" Start from WHERE {defaults[view]} and change a value only when the user asks."
+                  for g in required.get(name, [])]
+        line = f"Dataset {name}: every query must filter on " + "; ".join(groups) + "." if groups else f"Dataset {name}:"
+        if name in defaults:
+            line += f" Start from WHERE {defaults[name]} and change a value only when the user asks."
         lines.append(line)
     return " ".join(lines)
 
 
 def static_problem(sql: str, run_id: str | None = None) -> str | None:
-    """Why a query would be refused (one SELECT on allowed views, required filters), checked without the server:
-    a request with a problem goes back to the agent before the user is asked, never as a failed query."""
+    """Why a query would be refused (one SELECT on documented datasets of one connector, required filters), checked
+    without the server: a request with a problem goes back to the agent before the user is asked."""
     try:
-        sql = check_select(sql, get_lake(run_id).list_views())
+        sql = check_select(sql, list(connectors.datasets()))
+        connector_for(sql)
         check_required_filters(sql, required_filters())
     except LakeError as e:
         return str(e)
-    except Exception:
-        return None                            # the catalogue is unreachable: the query itself will say so
     return None
 
 
-def view_notes() -> dict[str, str]:
-    """Meaning of each view (and general notes) from the data dictionary, keyed by its '## ' heading.
-    It is a reference document: sandbox/references/datalake_dictionary.md, here and in production."""
-    path = config.datalake_dictionary()
-    if not path.exists():
-        return {}
-    intro, *sections = re.split(r"(?m)^## +", path.read_text())
-    notes = {s.split("\n", 1)[0].strip(): s.split("\n", 1)[1].strip() if "\n" in s else "" for s in sections}
-    about = "\n".join(ln for ln in intro.splitlines() if ln.strip() and not ln.startswith("# "))
-    return ({"About the data": about} if about else {}) | notes
+# ---------------------------------------------------------------- connectors and sign-in
+
+def needs_login() -> list[str]:
+    """The enabled connectors that need each user's own sign-in."""
+    return [name for name, c in connectors.enabled().items() if c.needs_login]
 
 
-def _module():
-    return importlib.import_module(config.DATALAKE)
+def connector_for(sql: str) -> str:
+    """The one connector that holds the datasets a query reads. Datasets of two connectors cannot be joined in
+    one query: query each, then combine the saved extracts with run_python."""
+    owners = connectors.datasets()
+    used = {owners[n].connector for n in (m.group(1) for m in re.finditer(r"\b(?:from|join)\s+([A-Za-z_][\w.]*)",
+                                                                        _strip(sql), re.I)) if n in owners}
+    if len(used) > 1:
+        raise LakeError(f"This query reads datasets of several connectors ({', '.join(sorted(used))}). Query each "
+                        "one separately, then combine the saved extracts with run_python.")
+    if not used:
+        raise LakeError(f"The query reads no known dataset. Use one of: {', '.join(owners)}.")
+    return used.pop()
 
 
-def needs_login() -> bool:
-    """Whether the lake asks for the user's own ID and password (the module sets NEEDS_LOGIN, a bool or a function)."""
-    if config.DATALAKE == "sqlite":
-        return False
-    flag = getattr(_module(), "NEEDS_LOGIN", False)
-    return bool(flag() if callable(flag) else flag)
+def get_lake(run_id: str | None = None, connector: str | None = None) -> Lake:
+    """A connector (by name; default: the first enabled) as this conversation's user sees it."""
+    enabled = connectors.enabled()
+    if not enabled:
+        raise LakeError("No data connector is enabled (extensions/connectors/, CONNECTORS).")
+    conn = enabled.get(connector) if connector else next(iter(enabled.values()))
+    if conn is None:
+        raise LakeError(f"Unknown connector: {connector}. Enabled: {', '.join(enabled)}.")
+    login = credentials.login_for(run_id, conn.name) if conn.needs_login else None
+    return Lake(conn, login)
 
 
-def get_lake(run_id: str | None = None) -> Lake:
-    """The lake as this conversation's user sees it. A lake that needs a login connects with the user's sign-in
-    (credentials.py, memory only); without one, every call says how to sign in."""
-    if config.DATALAKE == "sqlite":
-        return Lake("sqlite (in-process synthetic stand-in)", _sqlite_connect, _sqlite_views,
-                    source=f"sqlite:{config.datalake_dir()}", partitions=_sqlite_partitions)
-    module, source = _module(), getattr(_module(), "source", lambda: "")()
-    connect, views, parts = module.connect, module.list_views, getattr(module, "partitions", None)
-    if needs_login():
-        login = credentials.login_for(run_id)
+def lake_for(sql: str, run_id: str | None = None) -> Lake:
+    """The connector a query runs on (the statement is checked first, so a write is refused as such)."""
+    check_select(sql, list(connectors.datasets()))
+    return get_lake(run_id, connector_for(sql))
 
-        def signed_in():
-            if login is None:
-                raise LakeError("Not signed in to the data lake: enter your user ID and password under "
-                                "'Data lake sign-in' (or run the CLI with --lake-user).")
-            return login
-        connect = lambda: module.connect(login=signed_in())                                 # noqa: E731
-        views = lambda: module.list_views(login=signed_in())                                # noqa: E731
-        if parts is not None:
-            parts = lambda view: module.partitions(view, login=signed_in())                 # noqa: E731
-        source = f"{source or config.DATALAKE}#{login.user if login else ''}"   # each user's own catalogue view
-    return Lake(getattr(module, "NAME", config.DATALAKE), connect, views,
-                getattr(module, "limit_sql", None), source, parts)
+
+def dataset_notes() -> dict[str, str]:
+    """Each dataset's one-line description (list_datasets)."""
+    return {name: ds.description for name, ds in connectors.datasets().items()}

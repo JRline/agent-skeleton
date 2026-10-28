@@ -18,7 +18,7 @@ OpenAI-compatible API with `LLM_BACKEND=api`, or any LangChain chat model with `
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python scripts/setup_local.py                     # builds the synthetic lake and sample inputs (no data is in git)
+python scripts/setup_local.py                     # builds the synthetic sample data and inputs (no data is in git)
 python -m unittest discover -s tests -t .
 streamlit run app.py                              # http://localhost:8501, fake backend
 ```
@@ -30,8 +30,8 @@ streamlit run app.py                              # http://localhost:8501, fake 
 | Install, run the three stages, change settings | [docs/setup.md](docs/setup.md) |
 | Use the agent: sessions, tools, skills, data lake, evals | [docs/usage.md](docs/usage.md) |
 | Add or update skills, tools, data sources and evals with the GPT CLI | [docs/maintenance.md](docs/maintenance.md) |
-| Write a data-source entry | [docs/datasource_entry.md](docs/datasource_entry.md) |
-| Write a plugin (skill, toolkit, planner examples) | [docs/plugins.md](docs/plugins.md) |
+| Write a dataset file | [docs/dataset_entry.md](docs/dataset_entry.md) |
+| Add a connector, dataset, skill, toolkit or planner example | [docs/extensions.md](docs/extensions.md) |
 | Understand the design in full | [docs/design.md](docs/design.md) |
 | Work on the code as a coding agent | [CLAUDE.md](CLAUDE.md) |
 
@@ -42,20 +42,17 @@ All documentation is listed in [docs/README.md](docs/README.md).
 Details in `docs/design.md` §3. The map:
 
 ```
-app.py, cli.py, eval.py, smoke_model.py   entry points: UI, terminal, golden-task evals, backend check
-results_page.py, sources.py               UI helpers: result tables, numbered sources under an answer
-agent/        the framework (fixed): graph.py the LangGraph agent · loop.py step-by-step driver and state.json ·
-              chat_model.py JSON tool calls for a text-only model · checks.py number check and reviewers' inputs ·
-              tools.py tool registry and sandbox · lc_tools.py tools for LangChain · plugins.py loader ·
-              datalake.py read-only SQL guard · credentials.py lake sign-in (memory only) ·
-              pysandbox.py isolated model-written code · config.py
-agent/prompts/      planner, executor (system), request check, reviewer, finisher
-agent/toolkits/     built-in tools: files, analysis (run_python), datalake (SQL), docs
-agent/backends/     models (fake, ollama, claude, api, prod template) and data lakes (mock, ODBC template)
-plugins/      per environment: skills/, tools/, examples/ (planner worked examples)
-sandbox/      the only files tools may touch: inputs/, references/ (data dictionary), outputs/, work/
-tests/        unit tests (FakeModel, no network) · tests/golden/ eval tasks
-docs/         all documentation (index: docs/README.md) · gpt_prompts/ (used by scripts/gpt_pack.py)
-mock_lake/    synthetic data lake for local runs
-runs/         one folder per conversation: state.json, log.jsonl, outputs; checkpoints.sqlite (git-ignored)
+app.py, cli.py   entry points: UI and terminal
+agent/           the framework (fixed): the LangGraph agent (graph.py), its step-by-step driver (loop.py),
+                 the chat model for a text-only API, tools and sandbox, connectors (agent/connectors/: sqlite,
+                 mock, odbc), the read-only SQL guard, sign-in (memory only), prompts, UI helpers (agent/ui/)
+extensions/      added per environment, one folder per type (contract: docs/extensions.md):
+  connectors/    one folder per data source: connector.md + datasets/<dataset>.md (one file per table)
+  skills/        Markdown recipes that may use datasets of several connectors
+  toolkits/      Python tools the agent can call
+  examples/      worked plans for the planner
+scripts/         eval.py, smoke_model.py, setup_local.py, gpt_pack.py, mock_lake_server.py
+tests/           unit tests (FakeModel, no network) · tests/golden/ eval tasks
+docs/            all documentation (index: docs/README.md) · gpt_prompts/ (used by scripts/gpt_pack.py)
+sandbox/, runs/  runtime only, not in git: the user's files and work tables; one folder per conversation
 ```

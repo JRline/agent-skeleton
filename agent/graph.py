@@ -37,7 +37,7 @@ from .chat_model import ReplyError, TextChatModel
 UNUSABLE = (ReplyError, ValidationError, OutputParserException)   # a reply, not the backend, failed
 from .lc_tools import approval_needed, lc_tools, run_id
 from .memory import context_block, earlier_tasks, load_prompt, load_state, log, toolkit_guidance
-from .plugins import TOOLKITS, basic_toolkits, examples
+from .extensions import TOOLKITS, basic_toolkits, examples
 from .skills import get_skill, render_skill, render_skill_list
 from .tools import TOOLS, enabled_tools, quote_paths
 

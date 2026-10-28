@@ -67,62 +67,53 @@ Rules:
 ## 3. Repository layout
 
 ```
-app.py            # Streamlit UI: chat, step trace, approvals, data lake sign-in, file upload (§12)
-results_page.py   # Results view of a conversation's tables (opened only on request)
-cli.py            # same agent from the command line
-eval.py           # golden-task evals (tests/golden/*.json → runs/evals/)
-smoke_model.py    # check a backend: replies to tool prompts through the agent's chat model
-agent/
-  graph.py        # the agent: one LangChain create_agent graph and its custom middleware (§8)
-  loop.py         # conversation driver: run_one_step, resolve_pending, continue_with, run; events in state.json
-  chat_model.py   # TextChatModel: a LangChain chat model over the text-only API (JSON tool calls, repairs) (§5)
-  lc_tools.py     # the toolkits as LangChain tools (through tools.dispatch), ask_user, the model-call log
-  checks.py       # number check, cited outputs, request history, result tables, answer timing (shared checks)
-  credentials.py  # data lake sign-in, held in memory only (§6)
-  adapter.py      # ChatModel interface, ModuleChatModel, LangChainModel, get_model(backend)
-  session.py      # session memory mode: send fixed prompt parts once (§4a)
-  backends/
-    fake.py         # FakeModel (scripted, for tests) + DemoFakeModel (demo run)
-    openai_api.py   # a real model behind any OpenAI-compatible API (LLM_BACKEND=api), standard library only
-    ollama_api.py   # local model on a Mac, same call(text, effort) as production. Thinking follows effort by
-                    # default (off for none, on for medium; retried without it if the model can't think);
-                    # OLLAMA_THINK=0 leaves the model's default
-    claude_cli.py   # Claude (Haiku by default) via the Claude Code CLI on the Mac; development only
-    session_sim.py  # production stand-in for session memory mode (fixed instances with memory)
-    prod_template.py# shape of the production module
-    datalake_odbc_template.py # production data lake module: ODBC connection string with the user's UID and PWD
-    datalake_mock.py          # client for the mock lake server (DATALAKE=agent.backends.datalake_mock)
-  protocol.py     # finding the one JSON object in a reply (tolerant of fences and reasoning)
-  tools.py        # @tool registry, shared helpers, dispatch (tools live in toolkits)
-  toolkits/       # built-in toolkits, all basic: files, docs, analysis, datalake
-  pysandbox.py    # model-written analysis code: static check, then an isolated run via _pyrunner.py
-  plugins.py      # loads toolkits + plugins, catalogue, /command parsing, basic toolkits
-  datalake.py     # read-only SQL access: check_select guard, server-side limits, required filters, sign-in, metadata cache
-  tablecache.py   # each table file parsed once per version (memory + pickles in sandbox/work/.cache/)
-  replay.py       # exports a conversation as one replayable analysis script (§13)
-  export.py       # exports a conversation as one self-contained HTML page (§12)
-  workbook.py     # Excel layout reader (table blocks, header rows, totals, formulas) and read_range
-  outputs.py      # tool outputs as tables (shared by the UI and the HTML export)
-  sqlfmt.py       # SQL for people: one clause per line (approval cards, Sources, replay); never changes what runs
-  skills.py       # parse plugins/skills/*.md, list/render skills
-  memory.py       # the conversation record (state.json), persistence, log.jsonl, prompt and context helpers
-  prompts/        # system.md, planner.md, reviewer.md, action_review.md, finisher.md
-  settings.py     # user prompt settings: role, answer style, template overrides (settings/prompts.json)
-  config.py       # budgets, limits, effort policy, paths, backend choice
-plugins/          # extension point: tools/*.py (toolkits), skills/*.md, examples/, README.md (contract: docs/plugins.md)
-runs/             # one folder per conversation: state.json, log.jsonl, outputs/; checkpoints.sqlite (LangGraph)
-sandbox/          # the only folder tools may read or write
-  inputs/         # input files (uploads land here)
-  outputs/<run>/  # files written by write_file / save_table (approval needed)
-  work/<run>/     # scratch tables from sql_query and run_python (no approval: not user-facing)
-  work/.cache/    # parsed tables (pickles) written only by the agent (tablecache)
-  context/        # user's context documents (definitions, methodology)
-  references/     # reference documents skills cite, e.g. datalake_dictionary.md (what each lake view means)
-mock_lake/        # local stand-in for the remote lake, never inside sandbox/
-  data/           # synthetic CSVs, one per view
-  server.py       # mock lake server: separate read-only process over HTTP; per-user sign-in (MOCK_LAKE_USERS)
-sources.py        # UI: [ref: …] / [doc: …] → numbered links and a Sources list under the answer
-tests/            # one file per area (test_loop_fake_model.py: the agent end to end with FakeModel); golden/ for evals
+app.py              # Streamlit UI: chat, step trace, approvals, data sign-in per connector, file upload (§12)
+cli.py              # same agent from the command line
+agent/              # the framework (fixed)
+  graph.py          # the agent: one LangChain create_agent graph and its custom middleware (§8)
+  loop.py           # conversation driver: run_one_step, resolve_pending, continue_with, run; events in state.json
+  chat_model.py     # TextChatModel: a LangChain chat model over the text-only API (JSON tool calls, repairs) (§5)
+  lc_tools.py       # the toolkits as LangChain tools (through tools.dispatch), ask_user, the model-call log
+  checks.py         # number check, cited outputs, request history, result tables, answer timing
+  credentials.py    # data sign-in per connector, held in memory only (§6)
+  connectors/       # loads extensions/connectors/ (§6); built-in connection kinds: sqlite.py, mock.py, odbc.py
+  datalake.py       # read-only SQL on datasets: check_select guard, one connector per query, server-side limits,
+                    #   required filters, metadata cache
+  extensions.py     # loads toolkits (built-in + extensions/toolkits/), catalogue, /command parsing, basic toolkits
+  adapter.py        # ChatModel interface, ModuleChatModel, LangChainModel, get_model(backend)
+  session.py        # session memory mode: send fixed prompt parts once (§4a)
+  backends/         # models: fake.py, openai_api.py, ollama_api.py, claude_cli.py, session_sim.py, prod_template.py
+  protocol.py       # finding the one JSON object in a reply (tolerant of fences and reasoning)
+  tools.py          # @tool registry, shared helpers, dispatch (tools live in toolkits)
+  toolkits/         # built-in toolkits, all basic: files, docs, analysis, datalake
+  pysandbox.py      # model-written analysis code: static check, then an isolated run via _pyrunner.py
+  tablecache.py     # each table file parsed once per version (memory + pickles in sandbox/work/.cache/)
+  replay.py         # exports a conversation as one replayable analysis script (§13)
+  export.py         # exports a conversation as one self-contained HTML page (§12)
+  workbook.py       # Excel layout reader (table blocks, header rows, totals, formulas) and read_range
+  outputs.py        # tool outputs as tables (shared by the UI and the HTML export)
+  sqlfmt.py         # SQL for people: one clause per line (approval cards, Sources, replay); never changes what runs
+  skills.py         # parse extensions/skills/*.md, list/render skills
+  memory.py         # the conversation record (state.json), persistence, log.jsonl, prompt and context helpers
+  prompts/          # system.md, planner.md, reviewer.md, action_review.md, finisher.md
+  settings.py       # user prompt settings: role, answer style, template overrides (settings/prompts.json)
+  ui/               # results_page.py (result tables), sources.py ([ref: …] → numbered Sources list)
+  config.py         # budgets, limits, effort policy, paths, backend choice
+extensions/         # added per environment (contract: docs/extensions.md); "_" names are templates, never loaded
+  connectors/<name>/  connector.md (kind, sign-in, settings, shared notes), datasets/<dataset>.md (one per table),
+                    #   optional connector.py (kind custom) and sample.py (synthetic data into a git-ignored data/)
+  skills/           # Markdown recipes; may use datasets of several connectors
+  toolkits/         # Python tools
+  examples/         # worked plans for the planner (planner.md)
+scripts/            # eval.py, smoke_model.py, setup_local.py, gpt_pack.py, mock_lake_server.py, sample_inputs.py
+tests/              # unit tests (test_loop_fake_model.py: the agent end to end with FakeModel); golden/ for evals
+docs/               # all documentation; gpt_prompts/ for scripts/gpt_pack.py
+runs/               # runtime: one folder per conversation (state.json, log.jsonl, outputs/); checkpoints.sqlite
+sandbox/            # runtime: the only folder tools may read or write
+  inputs/           # input files (uploads land here)
+  outputs/<run>/    # files written by write_file / save_table (approval needed)
+  work/<run>/       # scratch tables from sql_query and run_python (no approval: not user-facing)
+  context/          # user's context documents (definitions, methodology)
 ```
 
 ---
@@ -218,7 +209,7 @@ channel with fixed effort, memory kept between calls, fresh only on `new_session
 notes past `SIM_MEMORY_TOKENS` — and answers through an inner backend (Claude Haiku via `claude_cli` by default).
 It re-sends each channel's memory to the inner model, so it does not save IO itself; it tests the agent's side.
 
-    LLM_BACKEND=prod PROD_API_MODULE=agent.backends.session_sim MODEL_MEMORY=session python eval.py --backend prod
+    LLM_BACKEND=prod PROD_API_MODULE=agent.backends.session_sim MODEL_MEMORY=session python scripts/eval.py --backend prod
 
 **Measured on the stand-in (one run, 2026-10-26).** Executor calls after the first sent 0.5–1.8k tokens instead
 of 5.8–9.5k (about 85–90% less); no summariser calls. The `check` and `review` channels still send their full
@@ -278,24 +269,24 @@ def tool(name, desc, args: type[BaseModel], risky=False):
 
 Each registry tool becomes a LangChain `StructuredTool` (`lc_tools.lc_tools`) with the same Pydantic args model,
 so the tool list the model sees is rendered from `TOOLS` and code and prompt never drift apart. Toolkit authors
-keep writing plain `@tool` functions (docs/plugins.md); they never touch LangChain.
+keep writing plain `@tool` functions (docs/extensions.md); they never touch LangChain.
 
-### Toolkits and plugins (`agent/toolkits/`, `plugins/`, `plugins.py`)
+### Toolkits (`agent/toolkits/`, `extensions/toolkits/`, `extensions.py`)
 Tools are grouped in **toolkits**: one module with `TOOLKIT = {"name", "description", "basic", "guidance"}`
 and tools registered with `@tool` (each tool records its toolkit; `ask_user` is `core`, always on).
-`plugins.load()` imports `agent/toolkits/*.py`, then `plugins/tools/*.py` (`_*.py` skipped); a plugin that fails
-is listed in `plugins.ERRORS` instead of breaking the app; duplicate toolkit or tool names are load errors.
-Built-in, all basic: `files`, `docs`, `analysis`, `datalake`. `guidance` is prompt text added only
-while the toolkit is enabled. Lake data is never a file the tools can open: it lives outside the sandbox
-(`mock_lake/data/`), and goes only through the `datalake` toolkit, as it will in production. The contract for new toolkits and skills is
-`docs/plugins.md`. **Rule:** an agent asked to add a tool, toolkit, plugin or skill only adds files under
-`plugins/` (and tests); it does not change the infrastructure (`agent/`, `app.py`, `cli.py`, prompts, config)
-or the docs unless the user specifically agrees.
+`extensions.load()` imports `agent/toolkits/*.py`, then `extensions/toolkits/*.py` (`_*.py` skipped); one that fails
+is listed in `extensions.ERRORS` instead of breaking the app; duplicate toolkit or tool names are load errors.
+Built-in, all basic: `files`, `docs`, `analysis`, `datalake`. `guidance` is prompt text added only while the toolkit
+is enabled. Data on a connector is never a file the tools can open: local sample data lives outside the sandbox
+(`extensions/connectors/<name>/data/`) and goes only through the `datalake` toolkit, as it will in production. The
+contract for every extension type is `docs/extensions.md`. **Rule:** an agent asked to add a connector, dataset,
+skill, toolkit or example only adds files under `extensions/` (and tests); it does not change the framework
+(`agent/`, `app.py`, `cli.py`, prompts, config, scripts) or the docs unless the user specifically agrees.
 
 ### Per-session tools, /commands and suggestions
 - A session starts with the basic toolkits (`config.BASIC_TOOLKITS` overrides). The user adds or removes
   toolkits in the sidebar, with `/name` in the task (a toolkit, a tool → its toolkit, a skill → forced skill +
-  its toolkits; `plugins.parse_commands`), or with CLI `--tools`. They stay on until End session (CLI: one
+  its toolkits; `extensions.parse_commands`), or with CLI `--tools`. They stay on until End session (CLI: one
   invocation = one session). Each run records its toolkits in `state["toolkits"]`.
 - The model is offered only enabled tools (`graph.SessionPrompt` filters each model call).
 - **Suggestions, the user decides:** the planner may reply `"suggest": {"toolkits", "skill", "why"}` (once per
@@ -315,8 +306,8 @@ analysis = run_python; datalake = list_datasets, describe_dataset, sql_query; co
 | `save_table` | Deliver a work table to `sandbox/outputs/<run>/` | path | **yes** |
 | `recall` / `search_docs` | Keyword search in the run's memory / context documents | snippets with source | no |
 | `run_python` | Model-written pandas code for every calculation (see below) | agreed JSON result + work table | **yes** |
-| `list_datasets` / `describe_dataset` | Views with meaning, required filters, columns and partitions (catalogue and dictionary; no data rows) | text | no |
-| `sql_query` | One read-only SELECT on the lake (filtered and aggregated) | preview + saved work table path | **yes**; no when a repeat is answered from its saved result |
+| `list_datasets` / `describe_dataset` | Datasets by connector with meaning, required filters, columns and partitions (catalogue and dataset files; no data rows) | text | no |
+| `sql_query` | One read-only SELECT on datasets of one connector (filtered and aggregated) | preview + saved work table path | **yes**; no when a repeat is answered from its saved result |
 | `ask_user` | Pause and ask the human | the answer | no |
 
 **Arithmetic is done by code, never by the model.** One tool, `run_python`, replaces the per-operation tools of
@@ -333,40 +324,50 @@ the first version (calc, add_column, aggregate…): the model writes the whole c
   and saves a table result as a work table. The code never writes files; printed output becomes the result if
   `result` is unset. The guidance tells the model never to type data values into code.
 
-### Data lake (`datalake.py`)
-The data lake is a **remote, read-only data lake cluster**. Nothing is ever loaded, uploaded or written to it, and the
-user's attached files are never part of it: they are local inputs, analysed with `read_file` / `run_python`. The
-toolkit guidance, the planner prompt ("INPUT FILES … are never in the data lake") and the `usage_overview` skill
-(lake views only) all say so, after a run offered a lake skill for an uploaded workbook.
-Production: the lake via SQL over ODBC (a module shaped like `datalake_odbc_template.py`, `DATALAKE=<module>`).
-Development, from the synthetic CSVs in `mock_lake/data/` (outside the sandbox, `config.LAKE_DATA_DIR`):
-- `DATALAKE=sqlite` (default, tests): an in-process, read-only in-memory SQLite copy.
-- `DATALAKE=agent.backends.datalake_mock`: the **mock lake server** (`mock_lake/server.py`, standard library),
-  a separate process on localhost reached over HTTP (`GET /views`, `POST /query`), shaped like the production
-  module (DB-API `connect()` + `list_views()`). The server itself is read-only (SQLite authorizer) whatever the
-  client sends, can require a token (`MOCK_LAKE_TOKEN`) and add latency (`MOCK_LAKE_LATENCY_MS`); when it is
-  down, tools return "Data lake server not reachable … Start it with: python mock_lake/server.py".
-What each view means is in `sandbox/references/datalake_dictionary.md` (`datalake.view_notes`), a reference
-document the skills cite.
+### Connectors and datasets (`agent/connectors/`, `datalake.py`)
+Data sources are **remote and read-only**. Nothing is ever loaded, uploaded or written to them, and the user's
+attached files are never part of them: they are local inputs, analysed with `read_file` / `run_python`. The toolkit
+guidance and the planner prompt say so, after a run offered a dataset skill for an uploaded workbook.
 
-**Sign-in (`credentials.py`).** A lake that needs each user's own login sets `NEEDS_LOGIN` in its module (the ODBC
-template does). The UI's sidebar then shows **Data lake sign-in** (user ID, password; the CLI: `--lake-user`, password
-asked without echo). The sign-in is checked with one catalogue call, then:
+- A **connector** is one connection: `extensions/connectors/<name>/connector.md` with front matter `name`, `kind`,
+  `description`, `needs_login` and the kind's settings, and a body of notes every dataset shares. Built-in kinds
+  (`agent/connectors/`): `odbc` (pyodbc; the connection string without the sign-in comes from the environment
+  variable named by `connection_env`), `mock` (the mock lake server over HTTP, `url`), `sqlite` (a folder of CSVs,
+  `data`, as a locked in-memory database). `kind: custom` loads `connector.py` from the folder. A kind provides
+  `connect(connector, login)` and `list_datasets(connector, login)`, optionally `partitions`, `limit_sql`, `source`.
+- A **dataset** is one table or view: `datasets/<name>.md` in its connector's folder, front matter `name`,
+  `description`, `partition_column`, `required_filters`, `default_filters`, then its documentation
+  (`docs/dataset_entry.md`). **Only described datasets can be queried**: the files are the allowlist (intersected
+  with what the server lists). Dataset names are unique across the enabled connectors.
+- `CONNECTORS` picks the enabled connectors (default all); `CONNECTOR_<NAME>_<KEY>` overrides a front matter value
+  (e.g. `CONNECTOR_SAMPLE_LAKE_KIND=mock`). A connector that fails to load is reported in `connectors.ERRORS`.
+- **One connector per query:** `datalake.connector_for(sql)` finds the connector of the datasets a query reads; a
+  query that mixes connectors is refused with advice to query each and combine the extracts with `run_python`.
+- **Development:** the `sample_lake` connector holds the synthetic data (`sample.py` builds `data/*.csv`, git-ignored;
+  `scripts/setup_local.py` and the tests call it). `kind: sqlite` by default (tests, quick runs);
+  `CONNECTOR_SAMPLE_LAKE_KIND=mock` reaches the same data through the **mock lake server**
+  (`scripts/mock_lake_server.py`, standard library): a separate process on localhost over HTTP (`GET /datasets`,
+  `POST /query`), read-only (SQLite authorizer) whatever the client sends, with optional per-user sign-in
+  (`MOCK_LAKE_USERS`), token (`MOCK_LAKE_TOKEN`) and latency (`MOCK_LAKE_LATENCY_MS`); when it is down, tools return
+  "Data lake server not reachable … Start it with: python scripts/mock_lake_server.py".
+
+**Sign-in (`credentials.py`).** A connector with `needs_login: yes` gets its own **Data sign-in: <name>** section in
+the sidebar (user ID, password; the CLI: `--sign-in <name>=<user id>`, password asked without echo). The sign-in is
+checked with one catalogue call, then:
 - held only in this process's memory: per browser session in Streamlit's session state, and lent per conversation
-  (`credentials.use(run_id, login)`) for the time it runs; never written to `state.json`, `log.jsonl`, the
-  checkpoints, settings or a prompt, so the model never sees it; `Login`'s repr hides the password;
-- passed to the lake module as `connect(login=...)` (and `list_views` / `partitions`); the ODBC template builds
-  `<LAKE_ODBC>;UID={user};PWD={password}` (values braced, so `;` or `}` in a password cannot break the string);
+  and connector (`credentials.use(run_id, connector, login)`) for the time it runs; never written to `state.json`,
+  `log.jsonl`, the checkpoints, settings or a prompt, so the model never sees it; `Login`'s repr hides the password;
+- passed to the connection kind as `connect(connector, login)`; the `odbc` kind builds
+  `<connection string>;UID={user};PWD={password}` (values braced, so `;` or `}` in a password cannot break it);
 - masked in every error text (`credentials.scrub`), since drivers may echo the connection string;
-- forgotten on Sign out, End session, or when the process ends. Without a sign-in, lake tools say how to sign in.
-The metadata cache is per user (a user may see a different catalogue). Use HTTPS / an encrypted driver connection
-in production; the mock server's HTTP basic auth (`MOCK_LAKE_USERS="user:password"`, client `MOCK_LAKE_LOGIN=1`)
-is for local tests only.
+- forgotten on Sign out, End session, or when the process ends. Without a sign-in, the tools say how to sign in.
+The metadata cache is per user (a user may see a different catalogue). Use an encrypted connection in production;
+the mock server's HTTP basic auth is for local tests only.
 
-**The sample view `usage_limits`** (`mock_lake/generate_view.py`) mirrors a typical usage-and-limits view: DemoBank
+**The sample dataset `usage_limits`** (`extensions/connectors/sample_lake/`) mirrors a typical usage-and-limits table: DemoBank
 Group's RWA and leverage exposure under JFSA Basel III in JPY millions, Tokyo business days of FY2025.
 - Partitioned by fiscal year in `partition_key` (e.g. `FY2025`); `describe_dataset` lists the partitions from the
-  catalogue (`Lake.partitions`; a lake module may supply `partitions(view)`), so the agent never guesses a year.
+  catalogue (`Lake.partitions`; a connection kind may supply `partitions`), so the agent never guesses a year.
 - Dimensions needed for correct numbers: `partition_key`, `entity`, `rule`, `currency`, `scenario` (USED / ALLOC),
   `resource` (RWA / Leverage exposure), `version` (CLOSED recommended; EARLY arrives first, some dates
   have CLOSED only, the newest EARLY only) and `method` (BOOKED; FRTB internal-model market risk also has DAILY and
@@ -374,7 +375,7 @@ Group's RWA and leverage exposure under JFSA Basel III in JPY millions, Tokyo bu
 - Hierarchies as `<dimension>_generation_<n>`: measure (resource > risk type > approach, JFSA OV1 / LR2), region
   and book (group > division > business line > product); one `amount` column; leaf rows only.
 - No latest flag: each resource and version has its own latest date (CLOSED lags EARLY, leverage lags RWA). Writes are refused twice: by
-`check_select` (one SELECT/WITH statement, no DML/DDL keywords, allowed views only) and by a read-only
+`check_select` (one SELECT/WITH statement, no DML/DDL keywords, documented datasets only) and by a read-only
 connection (SQLite authorizer; read-only lake account).
 Query results are saved as work tables, and later tools take the path: the model never retypes numbers.
 
@@ -395,23 +396,23 @@ preview, and the `read_range(path, sheet, range, header_rows)` call that loads a
 `MAX_SCAN_ROWS` rows; openpyxl only. Library-internal imports (`_strptime`, `time`, `calendar`, `locale`) are
 allowed at run time only, so pandas date parsing works; the static check still refuses them in the code.
 
-**IO cost.** Views can hold billions of rows and input files 50k+, so the design avoids needless reads:
+**IO cost.** Datasets can hold billions of rows and input files 50k+, so the design avoids needless reads:
 - Every query asks the server for at most `MAX_SQL_ROWS` + 1 rows (`datalake.limit_sql` appends `LIMIT`, or
-  wraps a query that has its own; a lake module may supply `limit_sql` for its dialect). Columns come from a
+  wraps a query that has its own; a connection kind may supply `limit_sql` for its dialect). Columns come from a
   zero-row query; `describe_dataset` returns no data rows.
 - A result over `MAX_SQL_ROWS` is refused, not truncated: nothing is saved and the model is told to filter (WHERE)
   and aggregate (GROUP BY, SUM/COUNT/AVG) in SQL to the level the goal needs, then run it again.
-- Required filters are standing background, not errors: the dictionary's `Default filters:` line (recommended
+- Required filters are standing background, not errors: each dataset file's `default_filters` (recommended
   values, e.g. `partition_key = 'FY2025' AND … AND version = 'CLOSED' AND method = 'BOOKED'`) and the required filters are
-  rendered into the datalake toolkit's guidance (`datalake.view_rules`; a toolkit's `guidance` may be a function)
+  rendered into the datalake toolkit's guidance (`datalake.dataset_rules`; a toolkit's `guidance` may be a function)
   so the agent knows them before writing SQL. `sql_query`'s `check` (`datalake.static_problem`) runs before
   approval: a query missing one goes back to the executor as a `precheck` correction and never runs.
-- The data dictionary lists each view's required filters (`Required filter: \`partition_key\`, \`scenario\` (or GROUP
+- Each dataset file lists its required filters (`required_filters: \`partition_key\`, \`scenario\` (or GROUP
   BY), …`, `datalake.required_filters`): every group must be filtered on one of its columns, and a group marked
   "(or GROUP BY)" may instead be split by in GROUP BY (values never added together). The partition must always be
   filtered. A query that breaks this is refused before it reaches the server. A keyword check, like
   `check_select`.
-- Views, columns and partitions are cached per lake source for `LAKE_META_TTL_S`, not fetched on every call or rerun.
+- Datasets, columns and partitions are cached per connector and user for `LAKE_META_TTL_S`, not fetched on every call or rerun.
 - The same SQL (whitespace aside) in a conversation is not sent again: `sql_query` reuses its saved table
   (`runs/<id>/sql_cache.json`) and says so; `refresh: true` forces a new query.
 - Each table file version (path, mtime, size, reader arguments) is parsed once (`tablecache`): `read_file`,
@@ -457,8 +458,8 @@ only once the toolkit is enabled, and of a skill (its steps, checks and referenc
 accepted, by the user directly or by their yes to a suggestion. Until then it sees one line per toolkit (description
 and tool names, so it can ask for one by calling it) and the planner sees one line per skill. Basic toolkits count
 as enabled from the start. The request check gets only the current plan step (`graph.current_step`: tool calls the
-model marks `step_done`, or a repeated call), and the checkers do not get a view's description again when the data
-dictionary is already among the skill's references. `describe_dataset` likewise leaves the documentation out then.
+model marks `step_done`, or a repeated call), and the checkers do not get a dataset's description again when it
+is already among the accepted skill's datasets. `describe_dataset` likewise leaves the documentation out then.
 
 Measured on Haiku (2026-10-29, same three golden tasks, tokens per model call): `file_average` 1,790 (main 1,906),
 `rwa_latest_total` 3,584 (main 3,365), `rwa_limit_status_now` 4,055 (main 4,117); executor calls 2.4k / 4.4k / 4.7k
@@ -603,7 +604,7 @@ Log the effort and latency of every call so the policy can be tuned with data. A
   which made the reviewer reject correct answers. Numbers quoted from context docs are cited `[doc: <file>]`.
   FINAL sits between `<<<FINAL` and `FINAL>>>` marker lines, and the checklist after it is headed "REVIEW
   CHECKLIST (instructions for you, not part of FINAL)": without the markers Haiku read the checklist as part of
-  the answer and rejected it. It also gets the documentation of the views the agent read (a valid source for
+  the answer and rejected it. It also gets the documentation of the datasets the agent read (a valid source for
   units, filter values, calendars and names) and the tables shown under the answer. It reports a problem only
   when it makes the answer wrong: a wrong or unsourced number, a claim contradicting the facts or documentation,
   the wrong date / version / scenario / filter, a direction contradicting the numbers, or an unanswered part of
@@ -624,16 +625,16 @@ The planner gets the enabled tools, the other toolkits and the skills (names and
 CONTEXT, and replies `{"plan": [...], "suggest": {"toolkits": [...], "skill": "<name>|none", "why": "..."}}`.
 Prompts are neutral: a question answerable from general knowledge needs no tools.
 
-### Skills (`plugins/skills/*.md`, `skills.py`)
-Front matter `name`, `description`, `toolkits`, `references` (context documents, e.g.
-`references/datalake_dictionary.md`), `source` (the one data source a skill is written for, e.g. `data lake view
-usage_limits`; none for a general skill; the skill list shows `[data source: …]` or `[general]` and the planner offers
-a source's skills only for questions about it), `when_to_use`; sections `## Steps` (become the plan), `## Checks`
+### Skills (`extensions/skills/*.md`, `skills.py`)
+Front matter `name`, `description`, `toolkits`, `datasets` (the datasets a skill is written for, from any enabled
+connectors; none for a general skill; the skill list shows `[datasets: …]` or `[general]` and the planner offers a
+skill only for questions about its datasets; once accepted, the datasets' files are in the prompt), `references`
+(other context documents, e.g. a methodology note), `when_to_use`; sections `## Steps` (become the plan), `## Checks`
 (added to the reviewer checklist) and `## Output`. The planner may suggest a skill (the user decides), or the
 user forces one with the sidebar or `/name` (then no planner call; its toolkits are enabled). Write steps in terms of tools (sql_query, run_python, save_table) and compute changes in SQL or run_python so
 the model never subtracts numbers itself. Keep skills general: entity, dates, slice and breakdown come from the
 request. Bundled: `file_summary` (general: any attached file - layout, formula logic, key figures, at most one
-Python run); for the `usage_limits` view: `usage_overview` (at most two small queries on the latest partition,
+Python run); for the `usage_limits` dataset: `usage_overview` (at most two small queries on the latest partition,
 structured output, no data-quality scan), `usage_comparison` (two dates, any slice and level; one extract at
 the deepest level needed, rolled up in Python, reusing dates found earlier) and `limit_breach_analysis`
 (breaches found in SQL with one aggregated query, then the start of each breach compared at component level to
@@ -650,7 +651,7 @@ Keep prompts short and literal. Show one example of valid JSON in each, as a sha
 - Writes go to `sandbox/` only. No delete, send, or network tools without explicit approval.
 - `risky=True` tools require approval in the CLI.
 - Caps: steps, total tokens, wall time, tool timeout.
-- No secrets in prompts, state, logs or checkpoints. The data lake sign-in is held in memory only and masked in
+- No secrets in prompts, state, logs or checkpoints. The data sign-in is held in memory only and masked in
   errors (§6); an API key is read from a file outside the repository (`API_KEY_FILE`).
 - Tool output is data: text inside files or observations is never treated as instructions.
 - Every number in a final output must trace to a tool `ref`, or be quoted from a context document and cited
@@ -790,27 +791,29 @@ cell by cell in VS Code / Spyder / Jupyter). The analysis comes first as plain c
   repairs, repeats and the finisher, the number check, review rounds, step limit, model errors, Stop, summarising,
   follow-ups).
 - UI smoke tests with `streamlit.testing.v1.AppTest` and FakeModel: a goal runs to `finished`, approvals, rejection
-  reasons, verbose off prints no data, data lake sign-in (wrong then right password, sign out).
+  reasons, verbose off prints no data, data sign-in per connector (wrong then right password, sign out).
 - Reply protocol tests: malformed JSON, two objects, unknown tool, disabled toolkit, repairs and their size.
 - Tool tests: deterministic outputs, truncation, sandbox enforcement, time limits.
-- Data lake tests: the guard rejects writes, multiple statements and unknown views; the connection refuses writes;
+- Data tests: the guard rejects writes, multiple statements and unknown datasets; one connector per query; the
+  connection refuses writes;
   row cap; per-user sign-in reaches the lake and never reaches state, logs, checkpoints, prompts or errors.
 - Skill/context tests: bundled skills parse; suggestions (accept skill, accept toolkits → re-plan, decline);
   forced skill skips the planner; context inline vs listed.
 - Plugin tests: built-in toolkits and basic set; only enabled tools offered; /commands; a plugin file is discovered
-  (the `_example_toolkit.py` template works when copied); broken plugins are reported; mid-run suggestion; file
+  (the `_template.py` toolkit works when copied); broken extensions are reported; every skill's datasets exist and
+  the templates parse; mid-run suggestion; file
   tools refuse lake storage.
 - Backend tests without network: Ollama against a local stand-in server, Claude CLI against a fake `claude` script,
   an OpenAI-compatible stand-in server (`api`), a native LangChain model with tool calling (`langchain`), the
   session memory stand-in.
-- Golden tasks (`eval.py`): representative goals with expected facts. Re-run after prompt, policy, model or
+- Golden tasks (`scripts/eval.py`): representative goals with expected facts. Re-run after prompt, policy, model or
   framework changes.
 
 ---
 
 ## 15. Build order (how this was built; also the order to read it)
 
-1. `adapter.py` and a backend, plus `smoke_model.py` against the real module.
+1. `adapter.py` and a backend, plus `scripts/smoke_model.py` against the real module.
 2. `chat_model.py` (reply protocol, repairs) plus tests.
 3. `tools.py` and the toolkits; `lc_tools.py` turns them into LangChain tools.
 4. `graph.py`: `create_agent` with the stock middleware, then the custom middleware one by one, each with a

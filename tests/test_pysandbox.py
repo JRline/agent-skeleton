@@ -88,7 +88,7 @@ class Run(TempDirs):
         out = self.run_ok("import pandas as pd\nresult = pd.read_csv('inputs/sample_capital.csv')", tables={})
         self.assertEqual(len(out["result"]["rows"]), 3)
         for reader in ("read_table", "pd.read_csv"):
-            for path in [str(config.datalake_dir() / "usage_limits.csv"), "../mock_lake/data/usage_limits.csv",
+            for path in [str((config.connectors_dir() / "sample_lake" / "data") / "usage_limits.csv"), "../extensions/connectors/sample_lake/data/usage_limits.csv",
                          "../outside.csv", "/etc/passwd",
                          "https://example.com/x.csv"]:
                 out = run_code(f"result = {reader}('{path}')", {}, run_id="r1", save_as="x")
@@ -101,7 +101,7 @@ class Run(TempDirs):
         for path in ("inputs/daily capital.xlsx", "sandbox/inputs/daily capital.xlsx"):
             out = self.run_ok(f"import pandas as pd\nxl = pd.ExcelFile('{path}')\nresult = xl.sheet_names", tables={})
             self.assertEqual(out["result"]["value"], ["Sheet1"])
-        for path in (str(config.datalake_dir() / "usage_limits.csv"), "/etc/passwd", "../x.xlsx"):
+        for path in (str((config.connectors_dir() / "sample_lake" / "data") / "usage_limits.csv"), "/etc/passwd", "../x.xlsx"):
             self.assertFalse(run_code(f"result = pd.ExcelFile('{path}')", {}, run_id="r1", save_as="x")["ok"], path)
 
     def test_a_missing_file_says_how_paths_work(self):

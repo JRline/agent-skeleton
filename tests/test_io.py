@@ -42,11 +42,21 @@ class RecordingLake:
         self.view_calls += 1
         return ["v"]
 
+    def lake(self, source):
+        """A Lake on a connector whose connection kind is this recorder."""
+        import types
+        from agent.connectors import Connector, Dataset
+        module = types.SimpleNamespace(connect=lambda c, login: self.connect(),
+                                       list_datasets=lambda c, login: self.views(), source=lambda c: source)
+        conn = Connector(name="rec", kind="rec", folder=config.EXTENSIONS_DIR, datasets={"v": Dataset("v", "rec")})
+        conn.module = lambda: module
+        return Lake(conn)
+
 
 class LakeLimits(TempDirs):
     def test_every_query_asks_the_server_for_a_limited_number_of_rows(self):
         rec = RecordingLake()
-        lake = Lake("rec", rec.connect, rec.views, source="rec-1")
+        lake = rec.lake("rec-1")
         lake.query("SELECT a, b FROM v ORDER BY a")
         lake.describe("v")
         self.assertEqual(rec.sent[0], f"SELECT a, b FROM v ORDER BY a LIMIT {config.MAX_SQL_ROWS + 1}")
@@ -57,9 +67,9 @@ class LakeLimits(TempDirs):
 
     def test_views_and_samples_are_fetched_once_per_session(self):
         rec = RecordingLake()
-        lake = Lake("rec", rec.connect, rec.views, source="rec-2")
+        lake = rec.lake("rec-2")
         for _ in range(3):
-            lake.list_views()
+            lake.list_datasets()
             lake.describe("v")
         self.assertEqual(rec.view_calls, 1)
         self.assertEqual(len(rec.sent), 1)                       # one metadata query
@@ -319,7 +329,7 @@ class ViewRulesUpFront(TempDirs):
     def test_the_agent_knows_each_views_filters_and_defaults_before_querying(self):
         from agent.memory import toolkit_guidance
         rules = toolkit_guidance(["datalake"])
-        self.assertIn("View usage_limits: every query must filter on partition_key; scenario (or GROUP BY it)", rules)
+        self.assertIn("Dataset usage_limits: every query must filter on partition_key; scenario (or GROUP BY it)", rules)
         self.assertIn("Start from WHERE partition_key = 'FY2025' AND entity = 'DemoBank Group'", rules)
         self.assertIn("version = 'CLOSED' AND method = 'BOOKED'", rules)
 

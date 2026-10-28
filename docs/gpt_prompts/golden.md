@@ -14,6 +14,6 @@ RULES:
 - Expected numbers must come from the data, worked out by me or a tool, never estimated. Mark any value you
   cannot verify as "TO CHECK" in your notes so I compute it before saving.
 - One behaviour per task. Vary the wording from existing tasks; do not copy them.
-- Use only views, columns and values in the data dictionary below.
+- Use only datasets, columns and values in the dataset files below.
 
 After my reply I will compute any value marked TO CHECK, save the files and run the evals.

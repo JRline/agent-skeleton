@@ -13,7 +13,7 @@ cd agent-skeleton
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python scripts/setup_local.py                     # builds the synthetic lake and sample inputs (no data is in git)
+python scripts/setup_local.py                     # builds the synthetic sample data and inputs (no data is in git)
 
 python -m unittest discover -s tests -t .        # unit tests, including the Streamlit UI tests
 python cli.py "Compute the latest capital ratio from inputs/sample_capital.csv and save a summary"
@@ -47,7 +47,7 @@ export OLLAMA_MODEL=qwen3:4b
 # thinking is off for effort "none" and on for "medium" by default; OLLAMA_THINK=0 leaves the model's default
 # export OLLAMA_THINK=never   # thinking off for every effort (qwen3.5 otherwise overthinks careful calls)
 
-python smoke_model.py --backend ollama     # does the model follow the JSON reply protocol?
+python scripts/smoke_model.py --backend ollama     # does the model follow the JSON reply protocol?
 python cli.py "Compute the latest capital ratio from inputs/sample_capital.csv"
 streamlit run app.py                        # pick "ollama" in the sidebar
 ```
@@ -74,7 +74,7 @@ that ships with the Claude desktop app (`claude -p`, all its own tools switched 
 an empty temporary folder). Prompts go to Anthropic as in any Claude Code session: **synthetic data only.**
 
 ```bash
-python smoke_model.py --backend claude
+python scripts/smoke_model.py --backend claude
 python cli.py --backend claude "Show DemoBank's CET1 ratio trend"
 streamlit run app.py                        # Backend "claude", Model Haiku 5.5 or Sonnet 5.5
 ```
@@ -88,7 +88,7 @@ When a real API is provided, the swap is a setting; nothing else changes.
   export LLM_BACKEND=api
   export API_URL=https://llm.example.internal/v1  API_MODEL=<model>  API_KEY_FILE=~/.config/agent/api_key
   # optional: API_MODEL_MEDIUM=<bigger model>  API_EFFORT_PARAM=reasoning_effort
-  python smoke_model.py --backend api
+  python scripts/smoke_model.py --backend api
   ```
   Keep the key in a file outside the repository (`API_KEY_FILE`); `API_KEY` also works.
 - **Any LangChain chat model** (native tool calling, no JSON protocol): install and get approval for its provider
@@ -106,7 +106,7 @@ When a real API is provided, the swap is a setting; nothing else changes.
    ```bash
    export LLM_BACKEND=prod
    export PROD_API_MODULE=gpt_wrapper      # or the existing module's name
-   python smoke_model.py --backend prod
+   python scripts/smoke_model.py --backend prod
    python -m unittest discover -s tests -t . # FakeModel tests still pass
    ```
 5. Re-tune prompts and the effort policy against the production model. The local model will behave differently.
@@ -128,12 +128,12 @@ When a real API is provided, the swap is a setting; nothing else changes.
 | `MEMORY_REFRESH_TOKENS` | `20000` | session mode: re-send everything after this much text |
 | `SIM_INNER`, `SIM_MEMORY_TOKENS` | `agent.backends.claude_cli`, `24000` | production stand-in (`agent/backends/session_sim.py`): inner model and memory size before compression |
 | `CLAUDE_MODEL`, `CLAUDE_CLI` | `claude-haiku-5-5`, auto | see `agent/backends/claude_cli.py` |
-| `DATALAKE` | `sqlite` | `sqlite` (in-process synthetic), `agent.backends.datalake_mock` (mock lake server) or a production lake module |
-| `MOCK_LAKE_URL`, `MOCK_LAKE_TOKEN` | `http://127.0.0.1:8765`, none | client settings for the mock lake server |
-| `MOCK_LAKE_LOGIN` / `MOCK_LAKE_USERS` | off / none | client: `1` = each user signs in; server: `user:password,...` test accounts |
-| `LAKE_ODBC` | example string | ODBC template: driver, server, port, database (no user or password: those come from the sign-in) |
-| `DATALAKE_VIEWS` | (all) | optional comma-separated allowlist of views |
-| `AGENT_PLUGINS` | `plugins/` | plugin folder (tools/*.py, skills/*.md) |
+| `CONNECTORS` | (all) | comma-separated connectors to enable (folders in `extensions/connectors/`) |
+| `CONNECTOR_<NAME>_<KEY>` | | overrides a value in a connector's `connector.md`, e.g. `CONNECTOR_SAMPLE_LAKE_KIND=mock`, `CONNECTOR_SAMPLE_LAKE_NEEDS_LOGIN=yes` |
+| `LAKE_ODBC` (or the name in `connection_env`) | | an `odbc` connector's connection string: driver, server, port, database; no user or password (those come from each user's sign-in) |
+| `MOCK_LAKE_URL`, `MOCK_LAKE_TOKEN` | `http://127.0.0.1:8765`, none | client settings for the mock lake server (`kind: mock`) |
+| `MOCK_LAKE_USERS` | none | mock server: `user:password,...` synthetic test accounts for per-user sign-in |
+| `AGENT_EXTENSIONS` | `extensions/` | extensions folder (connectors/, skills/, toolkits/, examples/); `AGENT_SKILLS`, `AGENT_TOOLKITS`, `AGENT_EXAMPLES` point one type elsewhere |
 | `BASIC_TOOLKITS` | (marked basic) | comma-separated toolkits on when a session starts |
 | `AGENT_MAX_STEPS` | `15` | tool steps per instruction |
 | `SQL_TIMEOUT_S` | `900` | longest a lake query may run (15 minutes) |

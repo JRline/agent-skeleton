@@ -7,15 +7,16 @@ THE REQUEST:
 {request}
 
 RULES (from the contract below; do not break them):
-- Reply with the complete file `plugins/skills/<name>.md` in one fenced block, then a short list of what you
+- Reply with the complete file `extensions/skills/<name>.md` in one fenced block, then a short list of what you
   changed and why. Nothing else goes in the file.
-- Front matter: name, description, toolkits, when_to_use, and source only if the skill is written for one data
-  source (e.g. `data lake view usage_limits`); references if it needs a context document.
+- Front matter (see the skill template below): name, description, toolkits, when_to_use, and datasets only if
+  the skill is written for datasets (they may be on different connectors); references if it needs a context
+  document. Datasets of different connectors are queried separately and combined with one run_python.
 - Steps are numbered and written in terms of the tools listed below. Every calculation is done by a tool (SQL to
   extract, one run_python to analyse); the model never computes numbers.
 - Keep the skill general: entity, dates, slice and breakdown come from the user's request. Say how a period
   stated in the request, a "latest" check and an open period are handled.
-- Use only the view's columns, filters and values documented in the data dictionary below. Never invent a column.
+- Use only the columns, filters and values documented in the dataset files below. Never invent a column.
 - Checks are bullets the reviewer can verify from tool results. Output says what the answer looks like.
 - If the request needs something the tools cannot do, say so instead of writing around it.
 

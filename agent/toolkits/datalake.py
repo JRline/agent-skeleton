@@ -1,4 +1,5 @@
-"""Toolkit: Read-only SQL on the remote data lake (a remote cluster): list, describe, query. Never local files."""
+"""Toolkit: read-only SQL on the datasets of the enabled connectors (extensions/connectors/): list, describe, query.
+Never local files. Each query runs on the connector that holds its datasets (agent/datalake.py)."""
 from __future__ import annotations
 
 import json
@@ -8,14 +9,16 @@ from pydantic import BaseModel, Field
 from .. import config
 from ..tools import ToolContext, ToolError, tool, _save_work, _table_preview
 
-_GUIDANCE = ("The data lake is a remote, read-only lake server: nothing can be loaded, uploaded or written "
-             "to it. Attached files (INPUT FILES) are local and never part of it: read and analyse them with "
-             "read_file and run_python, not with these tools. "
-             "Use list_datasets, then describe_dataset once per view, before writing SQL, unless the view's "
-             "documentation is already in your Skill references: then write the SQL from it. "
+_GUIDANCE = ("Datasets live on remote, read-only data sources (connectors): nothing can be loaded, uploaded or "
+             "written to them. Attached files (INPUT FILES) are local and never part of them: read and analyse "
+             "them with read_file and run_python, not with these tools. "
+             "Use list_datasets, then describe_dataset once per dataset, before writing SQL, unless the dataset's "
+             "documentation is already in your Skill references: then write the SQL from it. One query reads "
+             "datasets of one connector; to combine datasets of different connectors, query each and join the "
+             "saved extracts with run_python. "
              "SQL is for extraction and aggregation only: apply the required filters, select only the dates, "
              "scenario and resource you need, and GROUP BY to the level the analysis needs (e.g. date x "
-             "division, never leaf rows). Views hold billions of rows on a shared server, so keep each extract "
+             "division, never leaf rows). Datasets hold billions of rows on shared servers, so keep each extract "
              "small; a result over the row cap is refused, not truncated. Analysis (changes, averages over "
              "dates, ratios, utilisation, ranking) is done afterwards with run_python on the saved extracts. "
              "For a point-in-time question, first find the latest date of that resource and scenario "
@@ -25,20 +28,20 @@ _GUIDANCE = ("The data lake is a remote, read-only lake server: nothing can be l
              "not run twice in a conversation.")
 
 
-def _view_rules() -> str:
-    from ..datalake import view_rules
+def _dataset_rules() -> str:
+    from ..datalake import dataset_rules
     try:
-        return view_rules()
-    except Exception:                          # no dictionary: the general rules still apply
+        return dataset_rules()
+    except Exception:                          # no connectors: the general rules still apply
         return ""
 
 
 TOOLKIT = {
     "name": "datalake",
-    "description": ("Read-only SQL on the remote data lake (a remote server): the views named in the data "
-                    "dictionary. Needed for any question about lake data; not for attached files."),
+    "description": ("Read-only SQL on the datasets of the connected data sources (data lake, databases). Needed for "
+                    "any question about those datasets; not for attached files."),
     "basic": True,      # enabled when a session starts (read-only)
-    "guidance": lambda: _GUIDANCE + " " + _view_rules(),
+    "guidance": lambda: _GUIDANCE + " " + _dataset_rules(),
 }
 
 
@@ -46,56 +49,65 @@ class NoArgs(BaseModel):
     pass
 
 
-def _summary(note: str) -> str:
-    """A view's meaning without its column bullets: the first line plus rules such as 'Total RWA = ...' and its
-    required filters. Detail sections (### ...) are left to describe_dataset."""
-    note = note.split("\n###", 1)[0]
-    lines = [ln.strip() for ln in note.splitlines() if ln.strip() and not ln.strip().startswith("-")]
-    return " ".join(lines)
+WIDE = 12           # datasets with more columns list a count here; describe_dataset gives them with their meaning
 
 
-WIDE = 12           # views with more columns list a count here; describe_dataset gives them with their meaning
+def _skill_datasets(ctx: ToolContext) -> set[str]:
+    from ..memory import load_state, skill_datasets
+    try:
+        return set(skill_datasets(load_state(ctx.run_id)))
+    except FileNotFoundError:
+        return set()
 
 
-@tool("list_datasets", "List the data lake views you may query: what each one means (from the data dictionary), "
-      "required filters and columns. Start here.", NoArgs, preview_chars=2500)
+@tool("list_datasets", "List the datasets you may query, by connector: what each one means and its columns. "
+      "Start here.", NoArgs, preview_chars=2500)
 def list_datasets(args: NoArgs, ctx: ToolContext):
-    from ..datalake import get_lake, view_notes
-    lake, notes = get_lake(ctx.run_id), view_notes()
-    views = lake.list_views()
-    def cols(v):
-        names = lake.describe(v)
-        return f"{len(names)} columns: use describe_dataset" if len(names) > WIDE else f"columns: {', '.join(names)}"
-    parts = [f"- {v}: {_summary(notes.get(v, ''))}\n  {cols(v)}" for v in views]
-    general = [f"{h}: {_summary(body)} " + " ".join(ln.strip() for ln in body.splitlines() if ln.strip().startswith("-"))
-               for h, body in notes.items() if h not in views]
-    return "\n".join(parts + general) or "No views."
+    from .. import connectors
+    from ..datalake import get_lake
+    lines = []
+    for name, conn in connectors.enabled().items():
+        lake = get_lake(ctx.run_id, name)
+        lines.append(f"Connector {name} ({conn.description})" + (f": {conn.about}" if conn.about else ""))
+        for ds in lake.list_datasets():
+            cols = lake.describe(ds)
+            listed = f"{len(cols)} columns: use describe_dataset" if len(cols) > WIDE else f"columns: {', '.join(cols)}"
+            req = conn.datasets[ds].required
+            rule = ("\n  Required filter: " + ", ".join(" or ".join(c for c in g if c != "GROUP BY")
+                                                      + (" (or GROUP BY)" if "GROUP BY" in g else "") for g in req)
+                    if req else "")
+            lines.append(f"- {ds}: {conn.datasets[ds].description}{rule}\n  {listed}")
+    return "\n".join(lines) or "No datasets."
 
 
 class DescribeArgs(BaseModel):
-    view: str = Field(description="A view name from list_datasets")
+    dataset: str = Field(description="A dataset name from list_datasets")
 
 
-@tool("describe_dataset", "What one data lake view means (grain, required filters, time range, hierarchies, "
-      "measures) and its columns, from the data dictionary and the catalogue (no data rows). Use before writing SQL; "
-      "once per view in a conversation.", DescribeArgs, preview_chars=9000)
+@tool("describe_dataset", "What one dataset means (grain, required filters, time range, hierarchies, measures) and "
+      "its columns, from its documentation and the catalogue (no data rows). Use before writing SQL; once per "
+      "dataset in a conversation.", DescribeArgs, preview_chars=9000)
 def describe_dataset(args: DescribeArgs, ctx: ToolContext):
-    from ..datalake import get_lake, view_notes
-    lake = get_lake(ctx.run_id)
-    cols = lake.describe(args.view)
-    meaning = view_notes().get(args.view, "")
-    if meaning and str(config.datalake_dictionary().relative_to(config.SANDBOX_DIR)) in ctx.context:
-        meaning = "(The view's documentation is already in your Skill references; not repeated here.)"
+    from .. import connectors
+    from ..datalake import LakeError, get_lake
+    ds = connectors.datasets().get(args.dataset)
+    if ds is None:
+        raise LakeError(f"Unknown dataset: {args.dataset}. Use one of: {', '.join(connectors.datasets())}.")
+    lake = get_lake(ctx.run_id, ds.connector)
+    cols = lake.describe(args.dataset)
+    meaning = connectors.dataset_doc(args.dataset)
+    if args.dataset in _skill_datasets(ctx):
+        meaning = "(This dataset's documentation is already in your Skill references; not repeated here.)"
     try:
-        parts = lake.partitions(args.view)
+        parts = lake.partitions(args.dataset)
     except Exception:                       # a catalogue that cannot list partitions is not an error
         parts = []
-    found = f"\npartitions ({config.LAKE_PARTITION_COLUMN}): {', '.join(parts)}" if parts else ""
-    return (f"{meaning}\n\n" if meaning else "") + f"columns: {', '.join(cols)}" + found
+    found = f"\npartitions ({ds.partition_column}): {', '.join(parts)}" if parts else ""
+    return f"{meaning}\n\ncolumns: {', '.join(cols)}" + found
 
 
 class SqlArgs(BaseModel):
-    sql: str = Field(description="One read-only SELECT on data lake views. Select only needed columns; "
+    sql: str = Field(description="One read-only SELECT on the datasets of one connector. Select only needed columns; "
                                  "aggregate (SUM, GROUP BY) in SQL")
     save_as: str = Field(description="Short name for the result table, e.g. rwa_by_period")
     refresh: bool = Field(False, description="Run again even if this exact query already ran in this "
@@ -118,13 +130,13 @@ def _sql_problem(args) -> str | None:
     return static_problem(args.sql)
 
 
-@tool("sql_query", "Run one read-only SQL SELECT on the data lake; filter and aggregate in SQL. The full result "
+@tool("sql_query", "Run one read-only SQL SELECT on datasets of one connector; filter and aggregate in SQL. The full result "
       f"(at most {config.MAX_SQL_ROWS} rows) is saved as a work table (path in the reply) for run_python, "
       "read_file or save_table. A repeated identical query reuses its saved table. Each query needs the user's "
-      "approval (it reads the lake).", SqlArgs, risky=_queries_lake, check=_sql_problem,
+      "approval (it reads a data source).", SqlArgs, risky=_queries_lake, check=_sql_problem,
       timeout_s=lambda: config.SQL_TIMEOUT_S)
 def sql_query(args: SqlArgs, ctx: ToolContext):
-    from ..datalake import get_lake
+    from ..datalake import lake_for
     from ..tools import _load_table
     key = " ".join(args.sql.split()).rstrip(";").strip()          # same query, whatever the whitespace
     cache_file = ctx.run_dir / "sql_cache.json"
@@ -134,7 +146,7 @@ def sql_query(args: SqlArgs, ctx: ToolContext):
         df = _load_table(config.SANDBOX_DIR / hit["path"])
         return _table_preview(df, hit["path"], f" (reused: the same query already ran as {hit['ref']}; "
                                                "not sent to the lake again)")
-    df, truncated = get_lake(ctx.run_id).query(args.sql)
+    df, truncated = lake_for(args.sql, ctx.run_id).query(args.sql)
     if truncated:
         raise ToolError(f"The query returns more than {config.MAX_SQL_ROWS} rows, so nothing was saved. Aggregate "
                         "in SQL to the level the goal needs (GROUP BY the dimensions asked for, SUM/COUNT/AVG the "

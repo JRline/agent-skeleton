@@ -13,11 +13,8 @@ runs/
 settings/
 
 # No sample data: built by `python scripts/setup_local.py`
-mock_lake/data/
-sandbox/inputs/
-sandbox/outputs/
-sandbox/work/
-sandbox/context/
+extensions/connectors/*/data/
+sandbox/
 
 # Coding-agent tooling (per developer)
 .agents/

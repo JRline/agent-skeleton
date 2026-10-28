@@ -1,7 +1,7 @@
 """The golden-task runner, offline: a scripted FakeModel answers the tasks."""
 import json
 
-import eval as evaluation
+from scripts import eval as evaluation
 from agent.backends.fake import FakeModel
 
 from tests.helpers import OK, PLAN, TempDirs, final, tool_call
@@ -58,7 +58,7 @@ class Runner(TempDirs):
 
 class KeywordAlternatives(TempDirs):
     def test_a_keyword_list_accepts_any_of_its_words(self):
-        from eval import keyword_checks
+        from scripts.eval import keyword_checks
         task = {"expect_keywords": [["Equity Derivatives", "GM-EQ-DER"], "Hong Kong"]}
         self.assertEqual(keyword_checks(task, "GM-EQ-DER in Hong Kong"),
                          {"mentions 'Equity Derivatives or GM-EQ-DER'": True, "mentions 'Hong Kong'": True})

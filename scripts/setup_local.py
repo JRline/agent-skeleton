@@ -1,4 +1,4 @@
-"""Build the local synthetic data after a fresh clone: the mock data lake and the sample input files.
+"""Build the local synthetic data after a fresh clone: each connector's synthetic data and the sample input files.
 
 No data is committed to the repository; everything here is generated from code, the same every time.
 
@@ -12,17 +12,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from agent import config  # noqa: E402
-from mock_lake import generate_view  # noqa: E402
-from mock_lake.samples import write_samples  # noqa: E402
+from agent import config, connectors  # noqa: E402
+from scripts.sample_inputs import write_samples  # noqa: E402
 
 
 def main() -> int:
-    if generate_view.OUT.exists():
-        print(f"Mock lake already there: {generate_view.OUT}")
-    else:
-        df = generate_view.write()
-        print(f"Mock lake written: {generate_view.OUT} ({len(df):,} rows)")
+    built = connectors.build_samples()
+    print(f"Synthetic data built for: {', '.join(built)}" if built else "Synthetic connector data already there.")
     for path in write_samples(config.inputs_dir()):
         print(f"Sample input written: {path}")
     return 0

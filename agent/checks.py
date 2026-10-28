@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from . import config
 from .memory import context_docs, read_log, run_dir
-from .plugins import TOOLKITS
+from .extensions import TOOLKITS
 from .skills import get_skill
 from .tools import enabled_tools, read_doc, sandbox_path
 
@@ -158,6 +158,8 @@ def uncited_numbers(state: dict, final: str) -> list[str]:
     for ev in state["events"]:
         payload = ev.get("payload") or {}
         evidence += [str((payload.get("obs") or {}).get("result", "")), str(payload.get("answer", ""))]
+    from .memory import dataset_docs
+    evidence.append(dataset_docs(state))                  # an accepted skill's dataset documentation
     for doc in context_docs(state):
         try:
             evidence.append(read_doc(sandbox_path(doc)))
@@ -188,22 +190,21 @@ def _shown_tables(tables) -> str:
 
 
 def _view_docs(state: dict) -> str:
-    """Documentation the agent read (describe_dataset): units, filters and calendars the answer may state. Left out
-    when the data dictionary is already in the CONTEXT (an accepted skill's reference): the same text twice only
+    """Documentation the agent read (describe_dataset): units, filters and calendars the answer may state. A dataset
+    of the accepted skill is left out: its documentation is already in the CONTEXT, and the same text twice only
     made the checkers' prompts longer."""
-    dictionary = str(config.datalake_dictionary().relative_to(config.SANDBOX_DIR))
-    if dictionary in context_docs(state):
-        return ""
-    parts, seen = [], set()
+    from .memory import skill_datasets
+    covered = set(skill_datasets(state))
+    parts, seen = [], set(covered)
     for ev in state["events"]:
         p = ev["payload"]
         obs = p.get("obs") or {}
-        view = (p.get("input") or {}).get("view")
+        view = (p.get("input") or {}).get("dataset")
         if p.get("tool") == "describe_dataset" and obs.get("ok") and view not in seen:
             seen.add(view)
             stored = run_dir(state) / "outputs" / f"{obs['ref']}.txt"
             text = stored.read_text(errors="replace") if stored.is_file() else str(obs.get("result", ""))
-            parts.append(f"--- documentation of view {view} [ref: {obs['ref']}] ---\n{text[:config.REVIEW_CITED_CHARS // 2]}")
+            parts.append(f"--- documentation of dataset {view} [ref: {obs['ref']}] ---\n{text[:config.REVIEW_CITED_CHARS // 2]}")
     return "\n".join(parts)
 
 

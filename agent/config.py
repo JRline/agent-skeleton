@@ -28,19 +28,11 @@ LC_MODEL = os.getenv("LC_MODEL", "")
 BACKENDS = ["fake", "ollama", "claude", "api", "langchain", "prod"]
 MODEL_RETRIES = 3
 
-# ---------------------------------------------------------------- data lake
-# The data lake is a remote, read-only data lake cluster. Nothing is ever loaded or written to it, and its data is
-# never inside sandbox/ (that is the user's local files). Choices:
-# sqlite : in-process stand-in built from the synthetic CSVs in mock_lake/data/ (tests, quick runs)
-# agent.backends.datalake_mock : the mock lake server (python mock_lake/server.py), a separate process over HTTP
-# <module name> : a module like agent/backends/datalake_odbc_template.py (the production lake over ODBC in production)
-DATALAKE = os.getenv("DATALAKE", "sqlite")
-LAKE_DATA_DIR = Path(os.getenv("LAKE_DATA_DIR", ROOT / "mock_lake" / "data"))   # synthetic, outside the sandbox
-DATALAKE_VIEWS = [v for v in os.getenv("DATALAKE_VIEWS", "").split(",") if v]   # optional allowlist
-# Column that partitions a view (e.g. by fiscal year); each environment sets its own lake's name
-LAKE_PARTITION_COLUMN = os.getenv("LAKE_PARTITION_COLUMN", "partition_key")
+# ---------------------------------------------------------------- data (connectors and datasets: extensions/connectors/)
+# Data sources are remote and read-only: nothing is ever loaded or written to them, and their data is never inside
+# sandbox/ (that is the user's local files). Which connectors are on: CONNECTORS (default all; agent/connectors).
 MAX_SQL_ROWS = 5000             # rows a query may return; more is an error that asks for aggregation in SQL
-LAKE_META_TTL_S = 600           # views, columns and samples are cached this long (one round trip per session)
+LAKE_META_TTL_S = 600           # datasets, columns and partitions are cached this long (one round trip per session)
 READ_FILE_STORED_ROWS = 200     # read_file stores this many rows under its ref; the file itself stays the source
 UI_MAX_GRID_ROWS = 1000         # rows shown in a result grid (the download has them all)
 PY_TIMEOUT_S = 20               # model-written analysis code: wall-clock and CPU limit per run
@@ -48,11 +40,13 @@ PY_MAX_ROWS = 100_000           # rows a code result may return
 REVIEW_CITED_CHARS = 8000      # full tool outputs cited in a final answer, shown to the reviewer
 CONTEXT_INLINE_TOKENS = 1500   # context docs up to this size go into the prompt; larger ones via search_docs
 
-# ---------------------------------------------------------------- plugins (see docs/plugins.md)
-PLUGINS_DIR = Path(os.getenv("AGENT_PLUGINS", Path(__file__).resolve().parent.parent / "plugins"))
-SKILLS_DIR = Path(os.getenv("AGENT_SKILLS", PLUGINS_DIR / "skills"))
+# ---------------------------------------------------------------- extensions (see docs/extensions.md)
+# Everything added per environment: connectors/ (with their datasets), skills/, toolkits/, examples/
+EXTENSIONS_DIR = Path(os.getenv("AGENT_EXTENSIONS", Path(__file__).resolve().parent.parent / "extensions"))
+SKILLS_DIR = Path(os.getenv("AGENT_SKILLS", EXTENSIONS_DIR / "skills"))
+TOOLKITS_DIR = Path(os.getenv("AGENT_TOOLKITS", EXTENSIONS_DIR / "toolkits"))
 # Worked examples for prompts (examples/<prompt>.md); swapped per environment like skills
-EXAMPLES_DIR = Path(os.getenv("AGENT_EXAMPLES", PLUGINS_DIR / "examples"))
+EXAMPLES_DIR = Path(os.getenv("AGENT_EXAMPLES", EXTENSIONS_DIR / "examples"))
 # Toolkits enabled when a session starts; empty = those whose TOOLKIT says "basic": True
 BASIC_TOOLKITS = [t for t in os.getenv("BASIC_TOOLKITS", "").split(",") if t]
 
@@ -117,11 +111,6 @@ def context_dir() -> Path:
     return SANDBOX_DIR / "context"
 
 
-def datalake_dir() -> Path:
-    """Synthetic lake data for the local stand-ins. Outside SANDBOX_DIR, so file tools can never see it."""
-    return LAKE_DATA_DIR
-
-
-def datalake_dictionary() -> Path:
-    """What each view means. A reference document (skills cite it), so it lives in the sandbox, unlike the data."""
-    return SANDBOX_DIR / "references" / "datalake_dictionary.md"
+def connectors_dir() -> Path:
+    """Connectors, their dataset files and any local synthetic data. Outside SANDBOX_DIR: file tools never see it."""
+    return EXTENSIONS_DIR / "connectors"

@@ -480,9 +480,9 @@ class LeanPrompts(LoopCase):
         out = config.RUNS_DIR / state["run_id"] / "outputs"
         out.mkdir(parents=True, exist_ok=True)
         (out / "describe_dataset-1.txt").write_text("view docs")
-        state["events"].append({"kind": "tool", "payload": {"tool": "describe_dataset", "input": {"view": "v"},
+        state["events"].append({"kind": "tool", "payload": {"tool": "describe_dataset", "input": {"dataset": "usage_limits"},
                                                             "obs": {"ok": True, "ref": "describe_dataset-1"}}})
-        self.assertEqual(_view_docs(state), "")                         # the skill's dictionary covers it
+        self.assertEqual(_view_docs(state), "")                         # the skill's dataset documentation covers it
         state["skill"] = None
         self.assertIn("view docs", _view_docs(state))
 

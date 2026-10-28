@@ -7,7 +7,8 @@ files it needs. This prints that bundle; the prompt for each task lives in docs/
   python scripts/gpt_pack.py toolkit "Add a tool that ..."
   python scripts/gpt_pack.py golden "Add eval tasks for ..."
   python scripts/gpt_pack.py examples "Add an example where ..."
-  python scripts/gpt_pack.py view "Add the view ... (columns and notes pasted here)"
+  python scripts/gpt_pack.py connector "Add a connector for ... (server, driver, sign-in)"
+  python scripts/gpt_pack.py dataset "Add the dataset ... (columns and notes pasted here)" [--connector sample_lake]
   python scripts/gpt_pack.py diagnose "It answered for the whole year" --run 20261025-221016-fbe9
 Add --out pack.md to write a file instead of printing. See docs/maintenance.md for the full procedures.
 """
@@ -21,12 +22,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from agent import config  # noqa: E402
+from agent import config, connectors  # noqa: E402
 from agent.memory import load_state, read_log  # noqa: E402
-from agent.plugins import catalogue  # noqa: E402
+from agent.extensions import catalogue  # noqa: E402
 from agent.skills import render_skill_list  # noqa: E402
 
-TASKS = ("skill", "toolkit", "golden", "examples", "view", "diagnose")
+TASKS = ("skill", "toolkit", "connector", "dataset", "golden", "examples", "diagnose")
 FILE_LIMIT = 15000          # chars per file: the GPT CLI has a context limit
 WARN_TOTAL = 60000
 
@@ -42,11 +43,18 @@ def file_block(rel: str) -> str:
     return block(rel, path.read_text()) if path.is_file() else block(rel, "(file not found)")
 
 
-def dictionary_block() -> str:
-    """The data dictionary lives in the sandbox, which tests and production may place elsewhere."""
-    path = config.datalake_dictionary()
-    title = "sandbox/references/" + path.name
-    return block(title, path.read_text()) if path.is_file() else block(title, "(file not found)")
+def datasets_block(only: str | None = None) -> str:
+    """The enabled connectors and their dataset files, as the agent reads them (one connector if named)."""
+    parts = []
+    for name, conn in connectors.enabled().items():
+        if only and name != only:
+            continue
+        rel = conn.folder.relative_to(ROOT) if conn.folder.is_relative_to(ROOT) else conn.folder
+        parts.append(f"--- {rel}/connector.md ---\n" + (conn.folder / "connector.md").read_text().strip())
+        for path in sorted((conn.folder / "datasets").glob("*.md")):
+            if not path.name.startswith("_"):
+                parts.append(f"--- {rel}/datasets/{path.name} ---\n" + path.read_text().strip())
+    return block("CONNECTORS AND DATASETS", "\n\n".join(parts) or "(none)")
 
 
 def tool_list() -> str:
@@ -77,32 +85,37 @@ def run_record(run_id: str, limit: int = 600) -> str:
     return "\n".join(lines)
 
 
-def build(task: str, request: str, like: str | None = None, run: str | None = None) -> str:
+def build(task: str, request: str, like: str | None = None, run: str | None = None,
+          connector: str | None = None) -> str:
     prompt = (ROOT / "docs" / "gpt_prompts" / f"{task}.md").read_text().replace("{request}", request.strip())
     parts = [prompt]
     if task == "skill":
-        parts += [file_block("docs/plugins.md"), block("TOOLS THE AGENT HAS", tool_list()),
-                  block("EXISTING SKILLS", render_skill_list()),
-                  file_block(f"plugins/skills/{like or 'usage_comparison'}.md"), dictionary_block()]
+        parts += [file_block("docs/extensions.md"), block("TOOLS THE AGENT HAS", tool_list()),
+                  block("EXISTING SKILLS", render_skill_list()), file_block("extensions/skills/_template.md"),
+                  file_block(f"extensions/skills/{like or 'usage_comparison'}.md"), datasets_block()]
     elif task == "toolkit":
-        parts += [file_block("docs/plugins.md"), file_block("plugins/tools/_example_toolkit.py"),
+        parts += [file_block("docs/extensions.md"), file_block("extensions/toolkits/_template.py"),
                   block("TOOLS THE AGENT ALREADY HAS", tool_list())]
+    elif task == "connector":
+        parts += [file_block("docs/extensions.md"), file_block("extensions/connectors/_template/connector.md"),
+                  file_block("agent/connectors/odbc.py"), datasets_block()]
+    elif task == "dataset":
+        parts += [file_block("docs/extensions.md"), file_block("extensions/connectors/_template/datasets/_template.md"),
+                  datasets_block(connector)]
     elif task == "golden":
         golden = sorted((ROOT / "tests" / "golden").glob("*.json"))
         parts += [block("EXISTING TASKS (do not copy)", "\n".join(p.read_text().strip() for p in golden)),
-                  dictionary_block()]
+                  datasets_block()]
     elif task == "examples":
-        parts += [file_block("plugins/examples/planner.md"), block("SKILLS", render_skill_list()),
+        parts += [file_block("extensions/examples/planner.md"), block("SKILLS", render_skill_list()),
                   block("TOOLKITS AND TOOLS", tool_list())]
-    elif task == "view":
-        parts += [file_block("docs/datasource_entry.md"), dictionary_block()]
     elif task == "diagnose":
         if not run:
             raise SystemExit("diagnose needs --run RUN_ID (the folder name under runs/)")
         state = load_state(run)
         parts += [block(f"RUN {run}", run_record(run))]
         if state.get("skill"):
-            parts.append(file_block(f"plugins/skills/{state['skill']}.md"))
+            parts.append(file_block(f"extensions/skills/{state['skill']}.md"))
     return "\n".join(parts)
 
 
@@ -112,9 +125,10 @@ def main() -> int:
     ap.add_argument("request", help="what you want, in your own words")
     ap.add_argument("--like", help="skill: an existing skill to show as the example (default usage_comparison)")
     ap.add_argument("--run", help="diagnose: the run id (folder name under runs/)")
+    ap.add_argument("--connector", help="dataset: the connector it belongs to (default: show all)")
     ap.add_argument("--out", help="write the pack to this file instead of printing it")
     args = ap.parse_args()
-    pack = build(args.task, args.request, args.like, args.run)
+    pack = build(args.task, args.request, args.like, args.run, args.connector)
     if args.out:
         Path(args.out).write_text(pack)
         print(f"Wrote {args.out} ({len(pack):,} characters).")

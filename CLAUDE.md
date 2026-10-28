@@ -8,17 +8,17 @@ read the section relevant to your task before changing code. `docs/setup.md` has
 - Tests: `python -m unittest discover -s tests -t .` (must pass before you finish any task)
 - Demo run: `python cli.py --yes "Compute the latest capital ratio from inputs/sample_capital.csv"`
 - UI: `streamlit run app.py`
-- Backend check: `python smoke_model.py --backend ollama` (or `--backend claude`: Haiku via the Claude Code CLI;
+- Backend check: `python scripts/smoke_model.py --backend ollama` (or `--backend claude`: Haiku via the Claude Code CLI;
   `--backend api`: a real OpenAI-compatible API, see `agent/backends/openai_api.py`)
-- Mock data lake server (closer to production): `python mock_lake/server.py`, then run with
-  `DATALAKE=agent.backends.datalake_mock` (per-user sign-in: start the server with `MOCK_LAKE_USERS=analyst:secret`
-  and the agent with `MOCK_LAKE_LOGIN=1`)
+- Mock lake server (closer to production): `python scripts/mock_lake_server.py`, then run with
+  `CONNECTOR_SAMPLE_LAKE_KIND=mock` (per-user sign-in: start the server with `MOCK_LAKE_USERS=analyst:secret` and
+  the agent with `CONNECTOR_SAMPLE_LAKE_NEEDS_LOGIN=yes`)
 - Replay script of a conversation: `python cli.py --export-script RUN_ID` (or the app's Export button)
 - Analysis run: `python cli.py --backend claude "/usage_comparison RWA by division, FY2025Q3 end vs latest"` (follow-up: `--resume RUN_ID "..."`)
-- Evals: `python eval.py --backend claude` (golden tasks in `tests/golden/`; results in `runs/evals/`). Run before and
+- Evals: `python scripts/eval.py --backend claude` (golden tasks in `tests/golden/`; results in `runs/evals/`). Run before and
   after any prompt, policy or model change.
 - Context pack for the GPT CLI as maintainer: `python scripts/gpt_pack.py skill "..."` (also toolkit, golden,
-  examples, view, diagnose --run RUN_ID). Procedures: `docs/maintenance.md`.
+  connector, dataset, examples, diagnose --run RUN_ID). Procedures: `docs/maintenance.md`.
 
 ## Constraints (do not break these)
 - The production environment is closed. Use only the packages in `requirements.txt` and the
@@ -42,7 +42,8 @@ read the section relevant to your task before changing code. `docs/setup.md` has
 - Tools may only touch files inside `config.SANDBOX_DIR` (use `tools.sandbox_path`).
 - Anything that writes, sends or deletes must be `risky=True` (needs approval). The one exception is
   per-run scratch tables in `sandbox/work/<run_id>/` (`config.work_dir`), which are not user-facing.
-- The data lake is read-only: every query goes through `datalake.check_select` and a read-only connection.
+- Data sources are read-only: every query goes through `datalake.check_select`, on documented datasets of one
+  connector, over a read-only connection.
 - Arithmetic is done by tools, never by the model: `run_python` (model-written pandas code) or SQL.
 - Model-written code runs only through `agent/pysandbox.py`: static check, user approval, then an isolated
   `python -I` process. It may only read data and must return `result`/`notes`; never `exec` it in the agent
@@ -51,7 +52,8 @@ read the section relevant to your task before changing code. `docs/setup.md` has
   (`loop.uncited_numbers`, checked before the LLM reviewer).
 - Never put real or confidential data in tests, fixtures or `sandbox/`. Use synthetic data.
 - Keep `docs/design.md` in sync when you change behaviour it describes.
-- **Adding a tool, toolkit, plugin or skill: follow `docs/plugins.md` and only add files under `plugins/`
+- **Adding a connector, dataset, skill, toolkit or example: follow `docs/extensions.md` and only add files under
+  `extensions/`
   (and their tests).** Do not change the infrastructure (`agent/`, `app.py`, `cli.py`, prompts, config) or the
   docs (`README.md`, `CLAUDE.md`, everything in `docs/`) unless the user specifically agrees.
 - Tools are offered per session: basic toolkits by default; others only when the user enables them (sidebar,
@@ -59,8 +61,8 @@ read the section relevant to your task before changing code. `docs/setup.md` has
 
 ## Recipes
 
-**Add a tool**: put it in a toolkit module under `plugins/tools/` (copy `_example_toolkit.py`), following
-`docs/plugins.md`: a `TOOLKIT` dict, a Pydantic args model with field descriptions, then
+**Add a tool**: put it in a toolkit module under `extensions/toolkits/` (copy `_template.py`), following
+`docs/extensions.md`: a `TOOLKIT` dict, a Pydantic args model with field descriptions, then
 ```python
 @tool("name", "What it returns, how big, and when NOT to use it.", ArgsModel, risky=False)
 def name(args: ArgsModel, ctx: ToolContext):
@@ -70,7 +72,7 @@ Add `tests/test_plugin_<name>.py` for normal use, bad input and sandbox limits. 
 `agent/toolkits/` and are infrastructure: change them only when the user asks for it.
 
 **Change a prompt** (`agent/prompts/*.md`): placeholders are `{{name}}`. Keep prompts short and
-literal with one JSON example. Run `smoke_model.py` against Ollama before and after.
+literal with one JSON example. Run `scripts/smoke_model.py` against Ollama before and after.
 
 **Change agent behaviour** (`agent/graph.py` middleware, `agent/loop.py` driver): add a FakeModel test in
 `tests/test_loop_fake_model.py` first, scripting replies per purpose:
@@ -80,20 +82,22 @@ the first step). Assert on `state["status"]`, events, and `model.efforts(purpose
 **Change the effort policy** (`agent/config.py` `EFFORT`; recovery effort in `graph.SessionPrompt`): update the effort
 assertions in the loop tests.
 
-**Add a skill** (`plugins/skills/<name>.md`, no code): front matter `name`, `description`, `toolkits`, `when_to_use`, and
-`source` when it is written for one data source (e.g. `data lake view usage_limits`; leave it out for a general skill), then
+**Add a skill** (`extensions/skills/<name>.md`, no code; copy `_template.md`): front matter `name`, `description`,
+`toolkits`, `when_to_use`, and `datasets` when it is written for datasets (any connectors; leave it out for a general
+skill), then
 `## Steps` (numbered; they become the plan), `## Checks` (bullets; added to the reviewer) and `## Output`.
 Write steps in terms of the tools (sql_query, run_python, save_table) and keep skills general: parameters
 (entity, dates, slice, breakdown) come from the request. `tests/test_skills.py` checks that every bundled skill parses.
 
-**Add a data lake view**: locally, add a synthetic `mock_lake/data/<view>.csv` (never inside `sandbox/`: the lake
-is remote and read-only) and describe it in `sandbox/references/datalake_dictionary.md`. In production, the view must be on the production allowlist (`DATALAKE_VIEWS`
-or the module's `list_views`).
+**Add a data source or dataset**: a connector is a folder `extensions/connectors/<name>/` (copy `_template/`):
+`connector.md` (kind odbc / mock / sqlite / custom, `needs_login`, settings) and one `datasets/<dataset>.md` per
+table, in the format of `docs/dataset_entry.md`. Only described datasets can be queried. Synthetic local data comes
+from the connector's optional `sample.py` (git-ignored `data/`, never inside `sandbox/`).
 
 ## Style
 - Python 3.10+ type hints, small functions, docstrings that say why.
 - No new abstraction layers or frameworks. Prefer plain functions and dicts in state (state must stay JSON-serialisable).
-  The one agreed exception is the small plugin loader (`agent/plugins.py`) for toolkits and skills.
+  The agreed exceptions are the small loaders for extensions (`agent/extensions.py`, `agent/connectors/`).
 - Keep diffs focused on the task. Do not reformat unrelated code.
 
 ---
@@ -119,7 +123,7 @@ or the module's `list_views`).
 - Evals (claude backend): about 0.8 on the 14 golden tasks; runs vary, so compare averages. The two
   `breach_source_*` tasks fail most often (step budget, source attribution).
 - Prompts follow the published best practices (ordered decisions, positive rules, reasons, tags); planner worked
-  examples are swappable (`plugins/examples/`). User answers and rejection reasons are facts that outrank the plan.
+  examples are swappable (`extensions/examples/`). User answers and rejection reasons are facts that outrank the plan.
 
 ## Status of branch `langgraph-prototype` (2026-10-28)
 - The agent runs on LangGraph 1.2 / LangChain 1.4: one `create_agent` graph (`agent/graph.py`) with stock approvals,
@@ -131,16 +135,22 @@ or the module's `list_views`).
 - Verified 2026-10-29: all 283 unit tests pass (Python 3.14 venv with requirements.txt), CLI demo runs, and two
   golden tasks on Haiku (`file_average`, `rwa_latest_total`) score 1.00. The full golden eval has not been run on
   this branch yet.
+- Extensions layout (2026-10-29): `plugins/` became `extensions/` with four types: `connectors/<name>/`
+  (connector.md + one `datasets/<dataset>.md` per table; built-in kinds sqlite, mock, odbc in `agent/connectors/`),
+  `skills/` (list `datasets:` from any connectors), `toolkits/`, `examples/`; each with a `_template`. "View" is now
+  "dataset". Sign-in is per connector (sidebar, CLI `--sign-in name=user`). Root holds only `app.py` and `cli.py`;
+  scripts moved to `scripts/`, UI helpers to `agent/ui/`; `mock_lake/` and the data dictionary are gone.
 - Leaner prompts (2026-10-29): toolkits and skills are one-line summaries until enabled or accepted, then their
   full docs; the request check gets the current step only; old tool results and calls are shortened (refs kept);
-  no repeated view docs. Three Haiku tasks score 1.00 at 1.8k / 3.6k / 4.1k tokens per call, level with main
+  no repeated dataset docs. Three Haiku tasks score 1.00 at 1.8k / 3.6k / 4.1k tokens per call, level with main
   (1.9k / 3.4k / 4.1k). 289 unit tests pass.
 
 ## Next tasks, in order
 1. Pin `requirements.txt` to production's exact Python and package versions (ask the owner). The grid number
    format (`NumberColumn(format="localized")`) and `st.segmented_control` need a recent Streamlit: check them.
 2. Production wrapper: copy `agent/backends/prod_template.py` (and the ODBC lake template) into modules that wrap
-   the real API and lake. Done inside the closed environment, by the owner. Then `smoke_model.py --backend prod`.
+   the real API, and a connector folder for the real lake (`extensions/connectors/_template/`). Done inside the
+   closed environment, by the owner. Then `scripts/smoke_model.py --backend prod`.
 3. Re-run the full eval against `prod` and re-tune prompts only if needed (one change at a time, before/after).
 4. On this branch: run the full golden eval on the LangGraph engine and compare with `main`'s recent runs; get the
    extra packages approved; then decide whether to merge.
@@ -168,7 +178,7 @@ or the module's `list_views`).
   CPU/time limit applies). Review with security before production.
 - `recall` and `search_docs` are keyword-only (no embeddings).
 - `datalake.check_select` is a keyword/regex guard, not a SQL parser. In production the read-only lake
-  account and view allowlist are the real protection; the guard is a second layer.
+  account and the dataset files (the allowlist) are the real protection; the guard is a second layer.
 - The `claude` backend (Claude Code CLI) is for development only: prompts go to Anthropic, so synthetic data only.
   Each call starts a CLI process (a few seconds of overhead).
 - Token counts are estimates (chars / 4).

@@ -4,7 +4,7 @@ from agent.loop import resolve_pending
 from agent.memory import load_prompt, new_state, run_dir
 from agent.skills import get_skill
 from agent.toolkits.datalake import TOOLKIT as LAKE_TOOLKIT
-from sources import number_sources, source_details
+from agent.ui.sources import number_sources, source_details
 
 from tests.helpers import TempDirs
 
@@ -47,27 +47,32 @@ class Citations(TempDirs):
         self.assertIn("2026Q3", d["output"])
 
     def test_documents_are_shown_from_the_sandbox(self):
-        d = source_details(new_state("g"), "doc", "references/datalake_dictionary.md")
-        self.assertIn("## usage_limits", d["output"])
+        config.context_dir().mkdir(parents=True, exist_ok=True)
+        (config.context_dir() / "method.md").write_text("## Method\nHeadroom is limit minus usage.\n")
+        d = source_details(new_state("g"), "doc", "context/method.md")
+        self.assertIn("## Method", d["output"])
 
 
 class LakeIsRemote(TempDirs):
     def test_guidance_and_planner_keep_local_files_out_of_the_lake(self):
         guidance = LAKE_TOOLKIT["guidance"]()
         self.assertIn("remote, read-only", guidance)
-        self.assertIn("never part of it", guidance)
+        self.assertIn("never part of them", guidance)
         planner = load_prompt("planner", goal="g", inputs="inputs/x.xlsx", tool_names="", other_toolkits="",
                               skills="", earlier="", context="")
-        self.assertIn("never in\nthe data lake and can never be loaded into it", planner)
+        self.assertIn("never in a dataset and can never be loaded into one", planner)
 
     def test_data_profile_is_for_lake_views_only(self):
         use = get_skill("usage_overview").when_to_use
         self.assertIn("not for an attached or local file", use)
         self.assertIn("Not for questions about values", use)            # a value question is not a profile
 
-    def test_the_dictionary_is_a_reference_document(self):
-        self.assertTrue(config.datalake_dictionary().is_file())
-        self.assertEqual(get_skill("usage_comparison").references, ["references/datalake_dictionary.md"])
+    def test_dataset_documentation_lives_with_its_connector(self):
+        from agent import connectors
+        ds = connectors.datasets()["usage_limits"]
+        self.assertEqual(ds.connector, "sample_lake")
+        self.assertIn("Fiscal years run from 1 April", connectors.dataset_doc("usage_limits"))   # connector notes
+        self.assertEqual(get_skill("usage_comparison").datasets, ["usage_limits"])
 
 
 class TablesAreNotRepeated(TempDirs):

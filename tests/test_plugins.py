@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 
 from agent.graph import first_prompt
-from agent import config, plugins
+from agent import config, extensions
 from agent.backends.fake import FakeModel
 from agent.loop import resolve_pending, run_one_step
 from agent.memory import new_state
@@ -31,9 +31,9 @@ def say_hello(args: HelloArgs, ctx: ToolContext):
 
 class Defaults(TempDirs):
     def test_builtin_toolkits_and_basic_set(self):
-        plugins.load()
-        self.assertEqual({"files", "docs", "analysis", "datalake"}, set(plugins.TOOLKITS))
-        self.assertEqual(set(plugins.basic_toolkits()), {"files", "docs", "analysis", "datalake"})
+        extensions.load()
+        self.assertEqual({"files", "docs", "analysis", "datalake"}, set(extensions.TOOLKITS))
+        self.assertEqual(set(extensions.basic_toolkits()), {"files", "docs", "analysis", "datalake"})
         self.assertEqual(TOOLS["sql_query"].toolkit, "datalake")
         self.assertEqual(TOOLS["run_python"].toolkit, "analysis")
         self.assertEqual(TOOLS["ask_user"].toolkit, "core")
@@ -51,13 +51,13 @@ class Toolkits(LakeOff):
         self.assertIn("read_file", tools)
         self.assertIn("ask_user", tools)
         self.assertNotIn("sql_query", tools)                          # no full docs until enabled
-        self.assertNotIn("describe_dataset once per view", system)
+        self.assertNotIn("describe_dataset once per dataset", system)
         others = system.split("## Other toolkits", 1)[1].split("## Tools", 1)[0]
         self.assertIn("- datalake: ", others)                          # one line, so the agent can ask for it
         self.assertIn("Tools: list_datasets, describe_dataset, sql_query.", others)
         system = first_prompt(new_state("hi", toolkits=["datalake"]))[0]["content"]
         self.assertIn("sql_query", system)
-        self.assertIn("describe_dataset once per view", system)
+        self.assertIn("describe_dataset once per dataset", system)
 
     def test_a_tool_that_does_not_exist_is_repaired_and_disabled_ones_are_not_listed(self):
         state = new_state("goal")
@@ -115,9 +115,9 @@ class MidRunSuggestion(LakeOff):
 
     def test_file_tools_cannot_reach_lake_data(self):
         """The lake is remote: its (synthetic) data lives outside the sandbox, so no file path reaches it."""
-        self.assertNotIn(config.SANDBOX_DIR.resolve(), config.datalake_dir().resolve().parents)
-        for path in ["datalake/usage_limits.csv", "../mock_lake/data/usage_limits.csv",
-                     str(config.datalake_dir() / "usage_limits.csv")]:
+        self.assertNotIn(config.SANDBOX_DIR.resolve(), (config.connectors_dir() / "sample_lake" / "data").resolve().parents)
+        for path in ["datalake/usage_limits.csv", "../extensions/connectors/sample_lake/data/usage_limits.csv",
+                     str((config.connectors_dir() / "sample_lake" / "data") / "usage_limits.csv")]:
             state = self.running()
             first_step(state, FakeModel({"executor": [j(thought="r", tool="read_file", input={"path": path})]}))
             if state["status"] == "awaiting_approval":          # reading a file asks first; even approved, it fails
@@ -127,66 +127,66 @@ class MidRunSuggestion(LakeOff):
 
 class Commands(LakeOff):
     def test_slash_commands(self):
-        out = plugins.parse_commands("Trend for DemoBank /usage_comparison, file inputs/a.csv /nope")
+        out = extensions.parse_commands("Trend for DemoBank /usage_comparison, file inputs/a.csv /nope")
         self.assertEqual(out["skill"], "usage_comparison")
         self.assertEqual(out["toolkits"], ["datalake", "analysis"])
         self.assertEqual(out["unknown"], ["nope"])
         self.assertNotIn("/usage_comparison", out["goal"])
         self.assertIn("inputs/a.csv", out["goal"])
-        self.assertEqual(plugins.parse_commands("run /sql_query please")["toolkits"], ["datalake"])
-        self.assertEqual(plugins.parse_commands("use /datalake")["toolkits"], ["datalake"])
+        self.assertEqual(extensions.parse_commands("run /sql_query please")["toolkits"], ["datalake"])
+        self.assertEqual(extensions.parse_commands("use /datalake")["toolkits"], ["datalake"])
 
     def test_catalogue_lists_toolkits_tools_and_skills(self):
-        kinds = {(i["kind"], i["name"]) for i in plugins.catalogue()}
+        kinds = {(i["kind"], i["name"]) for i in extensions.catalogue()}
         self.assertTrue({("toolkit", "datalake"), ("tool", "sql_query"), ("skill", "usage_comparison")} <= kinds)
 
 
-class UserPlugins(TempDirs):
+class UserToolkits(TempDirs):
     def setUp(self):
         super().setUp()
-        self._saved_plugins = config.PLUGINS_DIR
+        self._saved_plugins, self._saved_toolkits = config.EXTENSIONS_DIR, config.TOOLKITS_DIR
         tmp = Path(tempfile.mkdtemp())
         shutil.copytree(self._saved_plugins / "skills", tmp / "skills")
-        (tmp / "tools").mkdir()
-        config.PLUGINS_DIR = tmp
+        (tmp / "toolkits").mkdir()
+        config.EXTENSIONS_DIR, config.TOOLKITS_DIR = tmp, tmp / "toolkits"
         self.tmp = tmp
 
     def tearDown(self):
-        config.PLUGINS_DIR = self._saved_plugins
-        plugins.TOOLKITS.pop("greeting", None)
+        config.EXTENSIONS_DIR, config.TOOLKITS_DIR = self._saved_plugins, self._saved_toolkits
+        extensions.TOOLKITS.pop("greeting", None)
         TOOLS.pop("say_hello", None)
-        plugins.load(force=True)
+        extensions.load(force=True)
         shutil.rmtree(self.tmp, ignore_errors=True)
         super().tearDown()
 
-    def test_a_python_file_in_plugins_tools_becomes_a_toolkit(self):
-        (self.tmp / "tools" / "greeting.py").write_text(PLUGIN)
-        plugins.load(force=True)
-        self.assertEqual(plugins.ERRORS, [])
+    def test_a_python_file_in_extensions_toolkits_becomes_a_toolkit(self):
+        (self.tmp / "toolkits" / "greeting.py").write_text(PLUGIN)
+        extensions.load(force=True)
+        self.assertEqual(extensions.ERRORS, [])
         self.assertEqual(TOOLS["say_hello"].toolkit, "greeting")
-        self.assertIn(("toolkit", "greeting"), {(i["kind"], i["name"]) for i in plugins.catalogue()})
+        self.assertIn(("toolkit", "greeting"), {(i["kind"], i["name"]) for i in extensions.catalogue()})
         state = new_state("greet Ann", toolkits=["greeting"])
         first_step(state, FakeModel({"executor": [j(thought="hi", tool="say_hello", input={"name": "Ann"})]}), plan=["greet"])
         self.assertEqual(state["events"][-1]["payload"]["obs"]["result"], "Hello, Ann!")
 
     def test_the_template_toolkit_works_when_copied(self):
-        template = self._saved_plugins / "tools" / "_example_toolkit.py"
-        (self.tmp / "tools" / "fx.py").write_text(template.read_text())
-        plugins.load(force=True)
+        template = self._saved_plugins / "toolkits" / "_template.py"
+        (self.tmp / "toolkits" / "fx.py").write_text(template.read_text())
+        extensions.load(force=True)
         try:
-            self.assertEqual(plugins.ERRORS, [])
+            self.assertEqual(extensions.ERRORS, [])
             state = new_state("convert", toolkits=["fx"])
             first_step(state, FakeModel({"executor": [j(thought="c", tool="convert_amount",
                                                           input={"amount": 1000, "source": "USD", "target": "JPY"})]}))
             self.assertIn("151500.00 JPY", state["events"][-1]["payload"]["obs"]["result"])
         finally:
-            plugins.TOOLKITS.pop("fx", None)
+            extensions.TOOLKITS.pop("fx", None)
             TOOLS.pop("convert_amount", None)
 
     def test_a_broken_plugin_is_reported_not_fatal(self):
-        (self.tmp / "tools" / "broken.py").write_text("raise RuntimeError('half written')")
-        (self.tmp / "tools" / "nameless.py").write_text("X = 1")
-        plugins.load(force=True)
-        self.assertTrue(any("broken.py" in e and "half written" in e for e in plugins.ERRORS))
-        self.assertTrue(any("nameless.py" in e and "TOOLKIT" in e for e in plugins.ERRORS))
-        self.assertIn("files", plugins.TOOLKITS)
+        (self.tmp / "toolkits" / "broken.py").write_text("raise RuntimeError('half written')")
+        (self.tmp / "toolkits" / "nameless.py").write_text("X = 1")
+        extensions.load(force=True)
+        self.assertTrue(any("broken.py" in e and "half written" in e for e in extensions.ERRORS))
+        self.assertTrue(any("nameless.py" in e and "TOOLKIT" in e for e in extensions.ERRORS))
+        self.assertIn("files", extensions.TOOLKITS)

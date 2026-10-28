@@ -3,7 +3,7 @@ import unittest
 
 import pandas as pd
 
-from results_page import number_columns
+from agent.ui.results_page import number_columns
 
 
 class NumberColumns(unittest.TestCase):

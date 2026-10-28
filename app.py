@@ -17,19 +17,19 @@ from pathlib import Path
 
 import streamlit as st
 
-from agent import config, credentials, plugins, settings
+from agent import config, connectors, credentials, extensions, settings
 from agent.adapter import get_model
 from agent.backends import ollama_api
 from agent.datalake import get_lake, needs_login
 from agent.loop import (DONE, abort, answer_timing, continue_with, describe_timing, load_state, new_state,
                         rename, resolve_pending, run_one_step)
 from agent.memory import list_conversations, read_log
-from agent.plugins import basic_toolkits, parse_commands
+from agent.extensions import basic_toolkits, parse_commands
 from agent.skills import get_skill, list_skills
 from agent.pysandbox import normalize_code
 from agent.tools import step_summary
-import results_page
-from sources import render_answer, show_output
+from agent.ui import results_page
+from agent.ui.sources import render_answer, show_output
 from agent.sqlfmt import format_sql
 from agent.export import build_html
 from agent.replay import build_script, has_steps
@@ -148,46 +148,53 @@ def end_session() -> None:
     sign_out()
 
 
-def sign_out() -> None:
-    """Forget the data lake sign-in: this browser session's copy and every conversation it was lent to."""
-    credentials.forget(*ss.get("lake_runs", []))
-    ss.lake_login, ss.lake_runs = None, []
+def sign_out(connector: str | None = None) -> None:
+    """Forget a connector's sign-in (all, if none named): this browser session's copy and every conversation it was
+    lent to."""
+    logins = ss.get("lake_logins", {})
+    names = [connector] if connector else list(logins)
+    for name in names:
+        logins.pop(name, None)
+        for key in ss.get("lake_runs", []):
+            credentials.use(key, name, None)
+    ss.lake_logins = logins
 
 
-def _signed_in_lake():
-    key = "view-" + ss.setdefault("lake_key", secrets.token_hex(8))
-    credentials.use(key, ss.lake_login)
+def lend_sign_ins(key: str) -> None:
+    """This conversation's queries use this session's sign-ins (memory only)."""
+    for name in needs_login():
+        credentials.use(key, name, ss.get("lake_logins", {}).get(name))
     ss.lake_runs = list(dict.fromkeys(ss.get("lake_runs", []) + [key]))
-    return get_lake(key)
 
 
-def lake_sign_in() -> None:
-    """User ID and password for a lake that needs the user's own sign-in. Kept in this session's memory only (never
-    saved, logged or shown to the model); the password field is cleared as soon as the form is sent."""
-    login = ss.get("lake_login")
-    with st.expander("Data lake sign-in", expanded=login is None):
+def connector_sign_in(name: str) -> None:
+    """User ID and password for a connector that needs the user's own sign-in. Kept in this session's memory only
+    (never saved, logged or shown to the model); the password field is cleared as soon as the form is sent."""
+    login = ss.get("lake_logins", {}).get(name)
+    with st.expander(f"Data sign-in: {name}", expanded=login is None):
         if login is not None:
             st.success(f"Signed in as {login.user}")
-            st.button("Sign out", key="lake_sign_out", on_click=sign_out)
+            st.button("Sign out", key=f"sign_out_{name}", on_click=sign_out, args=(name,))
             return
-        with st.form("lake_sign_in", clear_on_submit=True):
-            user = st.text_input("User ID", key="lake_user")
-            password = st.text_input("Password", type="password", key="lake_password")
+        with st.form(f"sign_in_{name}", clear_on_submit=True):
+            user = st.text_input("User ID", key=f"user_{name}")
+            password = st.text_input("Password", type="password", key=f"password_{name}")
             sent = st.form_submit_button("Sign in", type="primary")
         if sent:
             if not (user.strip() and password):
                 st.error("Enter your user ID and password.")
                 return
             candidate, key = credentials.Login(user.strip(), password), "check-" + secrets.token_hex(8)
-            credentials.use(key, candidate)
-            try:
-                get_lake(key)._views()                    # one uncached call: does the lake accept this sign-in?
+            credentials.use(key, name, candidate)
+            try:                                  # one uncached call: does the server accept this sign-in?
+                lake = get_lake(key, name)
+                lake.module.list_datasets(lake.connector, candidate)
             except Exception as e:
                 st.error(f"Sign-in failed: {credentials.scrub(str(e))}")
                 return
             finally:
                 credentials.forget(key)
-            ss.lake_login = candidate
+            ss.setdefault("lake_logins", {})[name] = candidate
             st.rerun()
 
 
@@ -250,11 +257,10 @@ ss.setdefault("autorun", True)
 ss.setdefault("verbose", False)
 ss.setdefault("session_toolkits", basic_toolkits())
 if ss.get("pending_toolkits") is not None:      # set by /commands or an accepted suggestion last rerun
-    ss.session_toolkits = [t for t in ss.pop("pending_toolkits") if t in plugins.TOOLKITS]
+    ss.session_toolkits = [t for t in ss.pop("pending_toolkits") if t in extensions.TOOLKITS]
 s = ss.state
-if s and needs_login():                  # this conversation's queries use this session's sign-in (memory only)
-    credentials.use(s["run_id"], ss.get("lake_login"))
-    ss.lake_runs = list(dict.fromkeys(ss.get("lake_runs", []) + [s["run_id"]]))
+if s and needs_login():                  # this conversation's queries use this session's sign-ins (memory only)
+    lend_sign_ins(s["run_id"])
 
 # ---------------------------------------------------------------- sidebar
 with st.sidebar:
@@ -289,7 +295,7 @@ with st.sidebar:
         pick_claude_model()
     ss.autorun = st.toggle("Auto-run steps", value=ss.autorun, key="autorun_toggle")
     st.toggle("Verbose", key="verbose", help="On: thoughts, tool inputs and results. Off: only the steps.")
-    kits = plugins.TOOLKITS
+    kits = extensions.TOOLKITS
     st.multiselect("Tools (this session)", list(kits), key="session_toolkits",
                    format_func=lambda n: f"{n} — {kits[n]['description']}",
                    help="Kept for every message until End session. The agent may suggest more; you decide.")
@@ -299,19 +305,21 @@ with st.sidebar:
     with st.expander("Commands"):
         st.caption("Type these in a message to enable a toolkit or tool, or to use a skill.")
         st.markdown("\n".join(f"- `/{i['name']}` · {i['kind']} · {i['description']}"
-                              for i in plugins.catalogue()))
-    if "datalake" in ss.session_toolkits and needs_login():
-        lake_sign_in()
-    if "datalake" in ss.session_toolkits and (not needs_login() or ss.get("lake_login")):
-        with st.expander("Data lake"):
-            try:
-                lake = get_lake(s["run_id"] if s else None) if not needs_login() else _signed_in_lake()
-                st.caption(lake.name)
-                st.markdown("\n".join(f"- `{v}`" for v in lake.list_views()) or "No views.")
-            except Exception as e:
-                st.caption(f"Not available: {e}")
-    for err in plugins.ERRORS:
-        st.warning(f"Plugin not loaded: {err}")
+                              for i in extensions.catalogue()))
+    if "datalake" in ss.session_toolkits:
+        for name in needs_login():
+            connector_sign_in(name)
+        with st.expander("Datasets"):
+            key = "view-" + ss.setdefault("lake_key", secrets.token_hex(8))
+            lend_sign_ins(key)
+            for name, conn in connectors.enabled().items():
+                st.caption(f"{name} ({conn.kind})")
+                try:
+                    st.markdown("\n".join(f"- `{d}`" for d in get_lake(key, name).list_datasets()) or "No datasets.")
+                except Exception as e:
+                    st.caption(f"Not available: {credentials.scrub(str(e))}")
+    for err in extensions.ERRORS + connectors.ERRORS:
+        st.warning(f"Extension not loaded: {err}")
     with st.expander("Prompt settings"):
         prefs = settings.load()
         role = st.text_area("Role", value=prefs["role"], key="pref_role", height=80,
@@ -605,7 +613,7 @@ elif s and s["status"] == "awaiting_choice":
     p = s["pending"]
     st.info("The agent suggests more tools for this task (reason above). You decide.")
     picked = [t for t in p["toolkits"]
-              if st.checkbox(f"Enable toolkit `{t}` — {plugins.TOOLKITS[t]['description']}", value=True,
+              if st.checkbox(f"Enable toolkit `{t}` — {extensions.TOOLKITS[t]['description']}", value=True,
                              key=f"suggest_{t}")]
     use_skill = bool(p.get("skill")) and st.checkbox(
         f"Use skill `{p['skill']}` — {get_skill(p['skill']).description}", value=True, key="suggest_skill")

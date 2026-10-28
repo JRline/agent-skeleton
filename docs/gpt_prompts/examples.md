@@ -6,7 +6,7 @@ THE REQUEST:
 {request}
 
 RULES:
-- Reply with the complete file `plugins/examples/planner.md` in one fenced block (keep the HTML comment at the
+- Reply with the complete file `extensions/examples/planner.md` in one fenced block (keep the HTML comment at the
   top), then one line per example saying what decision it teaches.
 - 3 to 5 examples, varied: at least one where no skill fits, one with an open choice the plan must confirm, and
   one general-knowledge question. Each has GOAL, INPUT FILES, a one-line Reasoning, and REPLY (one JSON line in

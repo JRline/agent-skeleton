@@ -5,17 +5,18 @@ import urllib.request
 from unittest import mock
 
 from agent import config
-from agent.backends import datalake_mock
+from agent import connectors
+from agent.connectors import mock as mock_kind
 from agent.datalake import LakeError, get_lake
 from agent.tools import ToolContext, dispatch
-from mock_lake import server
+from scripts import mock_lake_server as server
 
 from tests.helpers import STD, TempDirs
 
 
 class MockLakeServer(TempDirs):
     def start(self, **kw):
-        srv = server.serve(0, config.datalake_dir(), quiet=True, **kw)
+        srv = server.serve(0, (config.connectors_dir() / "sample_lake" / "data"), quiet=True, **kw)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         self.addCleanup(srv.server_close)
         self.addCleanup(srv.shutdown)
@@ -23,7 +24,7 @@ class MockLakeServer(TempDirs):
         env = mock.patch.dict("os.environ", {"MOCK_LAKE_URL": url})
         env.start()
         self.addCleanup(env.stop)
-        lake = mock.patch.object(config, "DATALAKE", "agent.backends.datalake_mock")
+        lake = mock.patch.dict("os.environ", {"CONNECTOR_SAMPLE_LAKE_KIND": "mock"})
         lake.start()
         self.addCleanup(lake.stop)
         return url
@@ -31,7 +32,7 @@ class MockLakeServer(TempDirs):
     def test_views_and_queries_go_through_the_server(self):
         self.start()
         lake = get_lake()
-        self.assertEqual(lake.list_views(), ["usage_limits"])
+        self.assertEqual(lake.list_datasets(), ["usage_limits"])
         df, truncated = lake.query(f"SELECT SUM(amount) AS rwa FROM usage_limits WHERE as_of_date = '2026-03-26' "
                                    f"AND scenario = 'USED' AND resource = 'RWA' AND {STD}")
         self.assertEqual(df.iloc[0].tolist(), [245463])
@@ -56,7 +57,7 @@ class MockLakeServer(TempDirs):
                 urllib.request.urlopen(req)
             self.assertEqual(cm.exception.code, 400)
             cm.exception.close()
-        self.assertIn("usage_limits", get_lake().list_views())               # still there
+        self.assertIn("usage_limits", get_lake().list_datasets())               # still there
 
     def test_the_agent_guard_still_applies_first(self):
         self.start()
@@ -65,18 +66,19 @@ class MockLakeServer(TempDirs):
 
     def test_token_is_required_when_set(self):
         self.start(token="synthetic-dev-token")
+        conn = connectors.enabled()["sample_lake"]
         with self.assertRaisesRegex(RuntimeError, "Not authorised"):
-            datalake_mock.list_views()
+            mock_kind.list_datasets(conn)
         with mock.patch.dict("os.environ", {"MOCK_LAKE_TOKEN": "synthetic-dev-token"}):
-            self.assertIn("usage_limits", datalake_mock.list_views())
+            self.assertIn("usage_limits", mock_kind.list_datasets(conn))
 
     def test_server_down_gives_a_clear_message(self):
         with mock.patch.dict("os.environ", {"MOCK_LAKE_URL": "http://127.0.0.1:9"}), \
-                mock.patch.object(config, "DATALAKE", "agent.backends.datalake_mock"):
+                mock.patch.dict("os.environ", {"CONNECTOR_SAMPLE_LAKE_KIND": "mock"}):
             ctx = ToolContext(run_id="r1", run_dir=config.RUNS_DIR / "r1")
             obs = dispatch("list_datasets", {}, ctx, "list_datasets-1")
         self.assertFalse(obs["ok"])
-        self.assertIn("python mock_lake/server.py", obs["error"])
+        self.assertIn("python scripts/mock_lake_server.py", obs["error"])
 
     def test_lake_data_is_outside_the_sandbox(self):
-        self.assertNotIn(config.SANDBOX_DIR.resolve(), config.datalake_dir().resolve().parents)
+        self.assertNotIn(config.SANDBOX_DIR.resolve(), (config.connectors_dir() / "sample_lake" / "data").resolve().parents)

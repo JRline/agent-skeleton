@@ -27,7 +27,7 @@ class AnalysisTools(TempDirs):
         self.assertIn("Required filter", listing)
         self.assertIn("Fiscal years run from 1 April to 31 March", listing)     # general notes are listed too
         self.assertLess(len(listing), 2500)                                      # fits the observation preview
-        out = self.run_tool("describe_dataset", {"view": "usage_limits"})
+        out = self.run_tool("describe_dataset", {"dataset": "usage_limits"})
         self.assertIn("Each resource and version has its own latest date", out)
         self.assertIn("partitions (partition_key): FY2025", out)
         self.assertIn("component", out)
@@ -73,9 +73,11 @@ class AnalysisTools(TempDirs):
         self.assertTrue((config.outputs_dir("r1") / "capital.csv").exists())
 
     def test_search_docs_returns_matching_paragraphs(self):
-        ctx = self.ctx(["references/datalake_dictionary.md"])
+        config.context_dir().mkdir(parents=True, exist_ok=True)
+        (config.context_dir() / "calendar.md").write_text("# Calendar\n\nFiscal years run from 1 April to 31 March.\n")
+        ctx = self.ctx(["context/calendar.md"])
         out = self.run_tool("search_docs", {"query": "fiscal years april"}, ctx)
-        self.assertIn("dictionary.md", out)
+        self.assertIn("calendar.md", out)
         self.assertIn("Fiscal years run from 1 April to 31 March", out)
 
 

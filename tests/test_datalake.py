@@ -38,7 +38,7 @@ USAGE_RWA = f"scenario = 'USED' AND resource = 'RWA' AND {STD}"
 class SQLiteLake(TempDirs):
     def test_views_describe_and_query(self):
         lake = datalake.get_lake()
-        self.assertEqual(lake.list_views(), ["usage_limits"])
+        self.assertEqual(lake.list_datasets(), ["usage_limits"])
         cols = lake.describe("usage_limits")
         self.assertIn("component", cols)
         self.assertIn("amount", cols)

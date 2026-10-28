@@ -20,7 +20,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from agent import config, plugins
+from agent import config, extensions
 from agent.adapter import get_model
 from agent.loop import DONE, continue_with, load_state, pending_question, run
 from agent.skills import get_skill, list_skills
@@ -70,8 +70,9 @@ def main() -> int:
     ap.add_argument("--resume", metavar="RUN_ID")
     ap.add_argument("--input", action="append", default=[], help="file to copy into sandbox/inputs")
     ap.add_argument("--skill", help="force a skill (same as /skill_name in the task)")
-    ap.add_argument("--lake-user", metavar="USER_ID",
-                    help="sign in to a data lake that needs your own login; the password is asked without echo")
+    ap.add_argument("--sign-in", action="append", default=[], metavar="CONNECTOR=USER_ID",
+                    help="sign in to a connector that needs your own login (repeatable); the password is asked "
+                         "without echo")
     ap.add_argument("--export-script", metavar="RUN_ID",
                     help="write a Python script that replays the conversation's analysis, then exit")
     ap.add_argument("--export-html", metavar="RUN_ID",
@@ -89,10 +90,13 @@ def main() -> int:
 
     if not args.goal and not args.resume:
         ap.error("give a goal or --resume RUN_ID")
-    if args.lake_user:                       # kept in this process's memory only (agent/credentials.py)
+    for item in args.sign_in:                # kept in this process's memory only (agent/credentials.py)
         from getpass import getpass
         from agent import credentials
-        credentials.use(credentials.DEFAULT, credentials.Login(args.lake_user, getpass("Data lake password: ")))
+        name, _, user = item.partition("=")
+        if not user:
+            ap.error("--sign-in takes CONNECTOR=USER_ID")
+        credentials.use(credentials.DEFAULT, name, credentials.Login(user, getpass(f"Password for {name}: ")))
 
     inputs = []
     for f in args.input:
@@ -102,17 +106,17 @@ def main() -> int:
         shutil.copy(src, dest)
         inputs.append(f"inputs/{src.name}")
 
-    cmd = plugins.parse_commands(args.goal or "")
+    cmd = extensions.parse_commands(args.goal or "")
     skill = args.skill or cmd["skill"]
     if skill and not get_skill(skill):
         ap.error(f"unknown skill {skill!r}; available: {', '.join(s.name for s in list_skills())}")
     extra = [t for t in args.tools.split(",") if t]
-    unknown = [t for t in extra if t not in plugins.TOOLKITS]
+    unknown = [t for t in extra if t not in extensions.TOOLKITS]
     if unknown:
-        ap.error(f"unknown toolkit(s) {unknown}; available: {', '.join(plugins.TOOLKITS)}")
-    toolkits = list(dict.fromkeys(plugins.basic_toolkits() + extra + cmd["toolkits"]
+        ap.error(f"unknown toolkit(s) {unknown}; available: {', '.join(extensions.TOOLKITS)}")
+    toolkits = list(dict.fromkeys(extensions.basic_toolkits() + extra + cmd["toolkits"]
                                   + (get_skill(skill).toolkits if skill else [])))
-    for err in plugins.ERRORS:
+    for err in extensions.ERRORS:
         print(f"Plugin not loaded: {err}")
 
     def approve(ev):
