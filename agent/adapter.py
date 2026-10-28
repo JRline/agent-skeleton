@@ -127,8 +127,22 @@ class ModuleChatModel(ChatModel):
             fn()
 
 
+class LangChainModel(ChatModel):
+    """Any LangChain chat model (LLM_BACKEND=langchain, LC_MODEL="provider:model"), used natively by the graph:
+    its own tool calling and structured output replace the JSON reply protocol (graph.build reads `.lc`).
+    Needs the provider's package (e.g. langchain-openai), approved and installed."""
+
+    name = "langchain"
+
+    def __init__(self, lc_model, name: str = ""):
+        self.lc, self.name = lc_model, name or type(lc_model).__name__
+
+    def complete(self, messages, effort="none", stop=None, purpose="executor", conversation=None):
+        return str(self.lc.invoke([(m["role"], m["content"]) for m in messages]).content)
+
+
 def get_model(backend: str | None = None) -> ChatModel:
-    """Build the model for a backend name: fake | ollama | claude | prod."""
+    """Build the model for a backend name: fake | ollama | claude | api | langchain | prod."""
     backend = backend or config.BACKEND
     if backend == "fake":
         from .backends.fake import DemoFakeModel
@@ -139,7 +153,13 @@ def get_model(backend: str | None = None) -> ChatModel:
     if backend == "claude":
         from .backends import claude_cli
         return ModuleChatModel(claude_cli, "claude", pass_messages=True)
+    if backend == "api":                     # a real model behind an OpenAI-compatible API
+        from .backends import openai_api
+        return ModuleChatModel(openai_api, "api", pass_messages=True)
+    if backend == "langchain":
+        from langchain.chat_models import init_chat_model
+        return LangChainModel(init_chat_model(config.LC_MODEL), config.LC_MODEL)
     if backend == "prod":
         module = importlib.import_module(config.PROD_API_MODULE)
         return ModuleChatModel(module, "prod")
-    raise ValueError(f"Unknown backend {backend!r}. Use fake, ollama, claude or prod.")
+    raise ValueError(f"Unknown backend {backend!r}. Use fake, ollama, claude, api, langchain or prod.")

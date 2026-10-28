@@ -60,7 +60,7 @@ WIDE = 12           # views with more columns list a count here; describe_datase
       "required filters and columns. Start here.", NoArgs, preview_chars=2500)
 def list_datasets(args: NoArgs, ctx: ToolContext):
     from ..datalake import get_lake, view_notes
-    lake, notes = get_lake(), view_notes()
+    lake, notes = get_lake(ctx.run_id), view_notes()
     views = lake.list_views()
     def cols(v):
         names = lake.describe(v)
@@ -80,7 +80,7 @@ class DescribeArgs(BaseModel):
       "once per view in a conversation.", DescribeArgs, preview_chars=9000)
 def describe_dataset(args: DescribeArgs, ctx: ToolContext):
     from ..datalake import get_lake, view_notes
-    lake = get_lake()
+    lake = get_lake(ctx.run_id)
     cols = lake.describe(args.view)
     meaning = view_notes().get(args.view, "")
     try:
@@ -131,7 +131,7 @@ def sql_query(args: SqlArgs, ctx: ToolContext):
         df = _load_table(config.SANDBOX_DIR / hit["path"])
         return _table_preview(df, hit["path"], f" (reused: the same query already ran as {hit['ref']}; "
                                                "not sent to the lake again)")
-    df, truncated = get_lake().query(args.sql)
+    df, truncated = get_lake(ctx.run_id).query(args.sql)
     if truncated:
         raise ToolError(f"The query returns more than {config.MAX_SQL_ROWS} rows, so nothing was saved. Aggregate "
                         "in SQL to the level the goal needs (GROUP BY the dimensions asked for, SUM/COUNT/AVG the "

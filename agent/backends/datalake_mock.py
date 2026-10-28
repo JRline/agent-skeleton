@@ -6,6 +6,7 @@ allowlist on top. Standard library only. Settings: MOCK_LAKE_URL (http://127.0.0
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import urllib.error
@@ -27,11 +28,19 @@ def source() -> str:
     return _url()
 
 
-def _call(path: str, body: dict | None = None) -> dict:
+def NEEDS_LOGIN() -> bool:  # noqa: N802 - the name lake modules use (a bool or a function)
+    """MOCK_LAKE_LOGIN=1: the server checks each user's ID and password (start it with MOCK_LAKE_USERS)."""
+    return os.getenv("MOCK_LAKE_LOGIN", "") == "1"
+
+
+def _call(path: str, body: dict | None = None, login=None) -> dict:
     """One request. Errors become plain messages the agent can show: unreachable, unauthorised, bad SQL."""
     req = urllib.request.Request(_url() + path, data=json.dumps(body).encode() if body is not None else None,
                                  headers={"Content-Type": "application/json"})
-    if os.getenv("MOCK_LAKE_TOKEN"):
+    if login is not None:                    # the user's own sign-in (HTTP basic auth; use HTTPS for a real server)
+        token = base64.b64encode(f"{login.user}:{login.password}".encode()).decode()
+        req.add_header("Authorization", f"Basic {token}")
+    elif os.getenv("MOCK_LAKE_TOKEN"):
         req.add_header("Authorization", f"Bearer {os.environ['MOCK_LAKE_TOKEN']}")
     try:
         with urllib.request.urlopen(req, timeout=config.SQL_TIMEOUT_S) as resp:
@@ -50,11 +59,11 @@ def _call(path: str, body: dict | None = None) -> dict:
 
 
 class _Cursor:
-    def __init__(self):
-        self.description, self._rows = None, []
+    def __init__(self, login=None):
+        self.description, self._rows, self._login = None, [], login
 
     def execute(self, sql: str):
-        out = _call("/query", {"sql": sql})
+        out = _call("/query", {"sql": sql}, self._login)
         self.description = [(c, None, None, None, None, None, None) for c in out["columns"]]
         self._rows = [tuple(r) for r in out["rows"]]
 
@@ -64,21 +73,25 @@ class _Cursor:
 
 
 class _Connection:
+    def __init__(self, login=None):
+        self._login = login
+
     def cursor(self):
-        return _Cursor()
+        return _Cursor(self._login)
 
     def close(self):
         pass
 
 
-def connect() -> _Connection:
-    return _Connection()
+def connect(login=None) -> _Connection:
+    return _Connection(login)
 
 
-def partitions(view: str) -> list[str]:
+def partitions(view: str, login=None) -> list[str]:
     """Partition values of a partitioned view (the mock server answers from its data; a real lake from metadata)."""
-    return [r[0] for r in _call("/query", {"sql": f"SELECT DISTINCT {config.LAKE_PARTITION_COLUMN} FROM {view}"})["rows"]]
+    sql = f"SELECT DISTINCT {config.LAKE_PARTITION_COLUMN} FROM {view}"
+    return [r[0] for r in _call("/query", {"sql": sql}, login)["rows"]]
 
 
-def list_views() -> list[str]:
-    return _call("/views")["views"]
+def list_views(login=None) -> list[str]:
+    return _call("/views", login=login)["views"]

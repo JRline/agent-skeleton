@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import secrets
 import os
 import re
 import threading
@@ -16,10 +17,10 @@ from pathlib import Path
 
 import streamlit as st
 
-from agent import config, plugins, settings
+from agent import config, credentials, plugins, settings
 from agent.adapter import get_model
 from agent.backends import ollama_api
-from agent.datalake import get_lake
+from agent.datalake import get_lake, needs_login
 from agent.loop import (DONE, abort, answer_timing, continue_with, describe_timing, load_state, new_state,
                         rename, resolve_pending, run_one_step)
 from agent.memory import list_conversations, read_log
@@ -144,6 +145,50 @@ def end_session() -> None:
     ss.skill = "Auto"
     ss.state = None
     model_for(ss.get("backend", config.BACKEND)).new_session()   # a backend with memory starts fresh instances
+    sign_out()
+
+
+def sign_out() -> None:
+    """Forget the data lake sign-in: this browser session's copy and every conversation it was lent to."""
+    credentials.forget(*ss.get("lake_runs", []))
+    ss.lake_login, ss.lake_runs = None, []
+
+
+def _signed_in_lake():
+    key = "view-" + ss.setdefault("lake_key", secrets.token_hex(8))
+    credentials.use(key, ss.lake_login)
+    ss.lake_runs = list(dict.fromkeys(ss.get("lake_runs", []) + [key]))
+    return get_lake(key)
+
+
+def lake_sign_in() -> None:
+    """User ID and password for a lake that needs the user's own sign-in. Kept in this session's memory only (never
+    saved, logged or shown to the model); the password field is cleared as soon as the form is sent."""
+    login = ss.get("lake_login")
+    with st.expander("Data lake sign-in", expanded=login is None):
+        if login is not None:
+            st.success(f"Signed in as {login.user}")
+            st.button("Sign out", key="lake_sign_out", on_click=sign_out)
+            return
+        with st.form("lake_sign_in", clear_on_submit=True):
+            user = st.text_input("User ID", key="lake_user")
+            password = st.text_input("Password", type="password", key="lake_password")
+            sent = st.form_submit_button("Sign in", type="primary")
+        if sent:
+            if not (user.strip() and password):
+                st.error("Enter your user ID and password.")
+                return
+            candidate, key = credentials.Login(user.strip(), password), "check-" + secrets.token_hex(8)
+            credentials.use(key, candidate)
+            try:
+                get_lake(key)._views()                    # one uncached call: does the lake accept this sign-in?
+            except Exception as e:
+                st.error(f"Sign-in failed: {credentials.scrub(str(e))}")
+                return
+            finally:
+                credentials.forget(key)
+            ss.lake_login = candidate
+            st.rerun()
 
 
 def stop_run() -> None:
@@ -207,6 +252,9 @@ ss.setdefault("session_toolkits", basic_toolkits())
 if ss.get("pending_toolkits") is not None:      # set by /commands or an accepted suggestion last rerun
     ss.session_toolkits = [t for t in ss.pop("pending_toolkits") if t in plugins.TOOLKITS]
 s = ss.state
+if s and needs_login():                  # this conversation's queries use this session's sign-in (memory only)
+    credentials.use(s["run_id"], ss.get("lake_login"))
+    ss.lake_runs = list(dict.fromkeys(ss.get("lake_runs", []) + [s["run_id"]]))
 
 # ---------------------------------------------------------------- sidebar
 with st.sidebar:
@@ -228,10 +276,15 @@ with st.sidebar:
 
     st.divider()
     st.header("Settings")
-    backends = ["fake", "ollama", "claude", "prod"]
+    backends = config.BACKENDS
     backend = st.selectbox("Backend", backends, index=backends.index(config.BACKEND), key="backend")
     if backend == "ollama":
         pick_ollama_model()
+    elif backend == "api":
+        st.caption(f"OpenAI-compatible API: {os.getenv('API_URL') or 'set API_URL'} · "
+                   f"{os.getenv('API_MODEL') or 'set API_MODEL'}")
+    elif backend == "langchain":
+        st.caption(f"LangChain model: {config.LC_MODEL or 'set LC_MODEL=provider:model'}")
     elif backend == "claude":
         pick_claude_model()
     ss.autorun = st.toggle("Auto-run steps", value=ss.autorun, key="autorun_toggle")
@@ -247,10 +300,12 @@ with st.sidebar:
         st.caption("Type these in a message to enable a toolkit or tool, or to use a skill.")
         st.markdown("\n".join(f"- `/{i['name']}` · {i['kind']} · {i['description']}"
                               for i in plugins.catalogue()))
-    if "datalake" in ss.session_toolkits:
+    if "datalake" in ss.session_toolkits and needs_login():
+        lake_sign_in()
+    if "datalake" in ss.session_toolkits and (not needs_login() or ss.get("lake_login")):
         with st.expander("Data lake"):
             try:
-                lake = get_lake()
+                lake = get_lake(s["run_id"] if s else None) if not needs_login() else _signed_in_lake()
                 st.caption(lake.name)
                 st.markdown("\n".join(f"- `{v}`" for v in lake.list_views()) or "No views.")
             except Exception as e:

@@ -1,8 +1,8 @@
 import unittest
 
 from agent import config
-from agent.protocol import ProtocolError, extract_json, parse_action, request_json
-from agent.tools import TOOLS
+from agent.chat_model import ReplyError, TextChatModel, parse_reply, to_message
+from agent.protocol import ProtocolError, extract_json
 
 
 class ExtractJson(unittest.TestCase):
@@ -40,78 +40,55 @@ class ExtractJson(unittest.TestCase):
             extract_json('Before I sent {"tool": "read_file"}. Now: {"final": "unfinish')
 
 
-class ParseAction(unittest.TestCase):
-    def test_valid_tool_call_is_validated_and_coerced(self):
-        a = parse_action('{"tool": "search_docs", "input": {"query": "tier 1", "k": "3"}}', TOOLS)
-        self.assertEqual(a.tool, "search_docs")
-        self.assertEqual(a.input["k"], 3)
-        a = parse_action('{"tool": "run_python", "input": {"code": "result = 1"}}', TOOLS)
-        self.assertEqual(a.input["save_as"], "analysis")   # default filled in
+class ReplyToMessage(unittest.TestCase):
+    """The text-only model's reply becomes a LangChain tool call or answer (agent/chat_model.py)."""
 
-    def test_final(self):
-        self.assertEqual(parse_action('{"final": "answer"}', TOOLS).final, "answer")
+    TOOLS = [{"type": "function", "function": {"name": n, "parameters": {}}} for n in ("read_file", "search_docs")]
 
-    def test_unknown_tool(self):
-        with self.assertRaisesRegex(ProtocolError, "Unknown tool"):
-            parse_action('{"tool": "delete_everything", "input": {}}', TOOLS)
+    def test_tool_call_and_final(self):
+        msg = to_message(parse_reply('{"thought": "t", "tool": "search_docs", "input": {"query": "tier 1"}}'),
+                         self.TOOLS, False)
+        self.assertEqual((msg.tool_calls[0]["name"], msg.tool_calls[0]["args"]), ("search_docs", {"query": "tier 1"}))
+        self.assertEqual(msg.additional_kwargs["thought"], "t")
+        msg = to_message({"final": "answer", "tables": ["t"]}, self.TOOLS, False)
+        self.assertEqual((msg.content, msg.additional_kwargs["tables"]), ("answer", ["t"]))
 
-    def test_both_tool_and_final(self):
-        with self.assertRaisesRegex(ProtocolError, "exactly one"):
-            parse_action('{"tool": "calc", "input": {"expression": "1"}, "final": "x"}', TOOLS)
+    def test_unknown_tool_and_neither(self):
+        with self.assertRaisesRegex(ReplyError, "Unknown tool"):
+            to_message({"tool": "delete_everything", "input": {}}, self.TOOLS, False)
+        with self.assertRaisesRegex(ReplyError, "exactly one"):
+            to_message({"thought": "hmm"}, self.TOOLS, False)
 
-    def test_neither(self):
-        with self.assertRaisesRegex(ProtocolError, "exactly one"):
-            parse_action('{"thought": "hmm"}', TOOLS)
-
-    def test_bad_arguments(self):
-        with self.assertRaisesRegex(ProtocolError, "Bad input for read_file"):
-            parse_action('{"tool": "read_file", "input": {}}', TOOLS)
+    def test_a_disabled_toolkits_tool_is_marked_for_the_user(self):
+        msg = to_message({"tool": "sql_query", "input": {}}, self.TOOLS, False, {"sql_query": "datalake"})
+        self.assertEqual(msg.additional_kwargs["needs_toolkit"], "datalake")
 
 
-class RequestJson(unittest.TestCase):
-    def _run(self, replies, base="none"):
-        efforts = []
-
-        def call(msgs, effort):
-            efforts.append(effort)
-            return replies.pop(0)
-        result = request_json(call, [{"role": "user", "content": "go"}],
-                              lambda t: parse_action(t, TOOLS), base)
-        return result, efforts
-
-    def test_first_try(self):
-        (action, _, attempts), efforts = self._run(['{"final": "ok"}'], base="medium")
-        self.assertEqual((action.final, attempts, efforts), ("ok", 1, ["medium"]))
-
+class Repairs(unittest.TestCase):
     def test_repairs_at_none_then_escalates_to_medium(self):
-        bad = "not json"
-        (action, _, attempts), efforts = self._run([bad, bad, bad, '{"final": "ok"}'])
-        self.assertEqual(attempts, 4)
-        self.assertEqual(efforts, ["none"] + ["none"] * config.MAX_REPAIRS + ["medium"])
+        from agent.backends.fake import FakeModel
+        m = FakeModel({"reviewer": ["not json"] * config.MAX_REPAIRS + ["also not", '{"ok": true, "issues": []}']})
+        from agent.checks import _Verdict
+        out = TextChatModel(chat=m).for_role("reviewer", "none").with_structured_output(_Verdict).invoke("check")
+        self.assertTrue(out.ok)
+        self.assertEqual(m.efforts(), ["none"] * (config.MAX_REPAIRS + 1) + ["medium"])
 
-    def test_gives_up(self):
-        with self.assertRaises(ProtocolError):
-            self._run(["x"] * 4)
-
-    def test_repair_message_explains_error(self):
-        seen = []
-
-        def call(msgs, effort):
-            seen.append(msgs)
-            return "bad" if len(seen) == 1 else '{"final": "ok"}'
-        request_json(call, [{"role": "user", "content": "go"}], lambda t: parse_action(t, TOOLS), "none")
-        self.assertIn("Invalid output", seen[1][-1]["content"])
-        self.assertEqual(seen[1][-2], {"role": "assistant", "content": "bad"})
+    def test_gives_up_with_a_clear_error(self):
+        from agent.backends.fake import FakeModel
+        from agent.checks import _Verdict
+        m = FakeModel({"reviewer": ["x"] * 4})
+        with self.assertRaisesRegex(ReplyError, "outside the protocol"):
+            TextChatModel(chat=m).for_role("reviewer").with_structured_output(_Verdict).invoke("check")
 
     def test_repair_prompt_stays_small(self):
-        seen = []
-
-        def call(msgs, effort):
-            seen.append(msgs)
-            return "Let me think. " * 300 if len(seen) < 3 else '{"final": "ok"}'
-        request_json(call, [{"role": "user", "content": "go"}], lambda t: parse_action(t, TOOLS), "none")
-        self.assertEqual(len(seen[2]), 3)                   # original + latest bad reply + error only
-        self.assertLessEqual(len(seen[2][1]["content"]), 401)
+        from agent.backends.fake import FakeModel
+        from agent.checks import _Verdict
+        m = FakeModel({"reviewer": ["Let me think. " * 300] * 2 + ['{"ok": true}']})
+        TextChatModel(chat=m).for_role("reviewer").with_structured_output(_Verdict).invoke("check")
+        third = m.calls[2]["messages"]
+        self.assertEqual(len(third), 3)                    # original + latest bad reply + error only
+        self.assertLessEqual(len(third[1]["content"]), 401)
+        self.assertTrue(third[2]["content"].startswith("Invalid output"))
 
 
 if __name__ == "__main__":

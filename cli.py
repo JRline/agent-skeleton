@@ -63,13 +63,15 @@ def show(ev: dict, verbose: bool) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("goal", nargs="?", help="what the agent should do; may contain /commands")
-    ap.add_argument("--backend", choices=["fake", "ollama", "claude", "prod"], default=config.BACKEND)
+    ap.add_argument("--backend", choices=config.BACKENDS, default=config.BACKEND)
     ap.add_argument("--tools", default="", help="extra toolkits for this session, e.g. datalake,tables")
     ap.add_argument("--verbose", action="store_true", help="print thoughts, tool inputs and results")
     ap.add_argument("--yes", action="store_true", help="auto-approve risky tools and accept suggestions")
     ap.add_argument("--resume", metavar="RUN_ID")
     ap.add_argument("--input", action="append", default=[], help="file to copy into sandbox/inputs")
     ap.add_argument("--skill", help="force a skill (same as /skill_name in the task)")
+    ap.add_argument("--lake-user", metavar="USER_ID",
+                    help="sign in to a data lake that needs your own login; the password is asked without echo")
     ap.add_argument("--export-script", metavar="RUN_ID",
                     help="write a Python script that replays the conversation's analysis, then exit")
     ap.add_argument("--export-html", metavar="RUN_ID",
@@ -87,6 +89,10 @@ def main() -> int:
 
     if not args.goal and not args.resume:
         ap.error("give a goal or --resume RUN_ID")
+    if args.lake_user:                       # kept in this process's memory only (agent/credentials.py)
+        from getpass import getpass
+        from agent import credentials
+        credentials.use(credentials.DEFAULT, credentials.Login(args.lake_user, getpass("Data lake password: ")))
 
     inputs = []
     for f in args.input:
@@ -114,7 +120,9 @@ def main() -> int:
             return True
         p = ev["payload"]
         print(f"\nAPPROVAL NEEDED: {p.get('tool')} {json.dumps(p.get('input'))[:300]}")
-        return input("Approve? [y/N] ").strip().lower() == "y"
+        if input("Approve? [y/N] ").strip().lower() == "y":
+            return True
+        return input("Why not? (the agent follows your reason) ").strip() or False
 
     def ask(ev):
         q = ev["payload"].get("question") or ev["payload"].get("input", {}).get("question", "")

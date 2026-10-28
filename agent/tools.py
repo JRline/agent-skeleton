@@ -229,8 +229,9 @@ def dispatch(name: str, args: dict, ctx: ToolContext, ref: str) -> dict:
         out = pool.submit(t.fn, parsed, replace(ctx, ref=ref)).result(timeout=limit)
     except FutureTimeout:
         return {"ok": False, "ref": ref, "error": f"Timed out after {limit}s."}
-    except Exception as e:
-        return {"ok": False, "ref": ref, "error": f"{type(e).__name__}: {e}"[:500]}
+    except Exception as e:                   # masked: a driver error may echo the lake password
+        from .credentials import scrub
+        return {"ok": False, "ref": ref, "error": scrub(f"{type(e).__name__}: {e}")[:500]}
     finally:
         pool.shutdown(wait=False)
     if not isinstance(out, ToolOutput):

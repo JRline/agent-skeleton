@@ -31,13 +31,13 @@ from langchain_core.exceptions import OutputParserException
 from langgraph.types import interrupt
 from pydantic import ValidationError
 
-from . import checks, config
+from . import checks, config, credentials
 from .chat_model import ReplyError, TextChatModel
 
 UNUSABLE = (ReplyError, ValidationError, OutputParserException)   # a reply, not the backend, failed
 from .lc_tools import approval_needed, lc_tools, run_id
 from .memory import context_block, earlier_tasks, load_prompt, load_state, log, toolkit_guidance
-from .plugins import TOOLKITS, basic_toolkits, examples
+from .plugins import basic_toolkits, examples
 from .skills import get_skill, render_skill, render_skill_list
 from .tools import TOOLS, enabled_tools, quote_paths
 
@@ -107,12 +107,16 @@ def plan(v: dict, chat) -> tuple[list[str], dict | None]:
     return steps, suggestion
 
 
+def _structured(model, schema, purpose: str):
+    return model.with_structured_output(schema).with_config(metadata={"purpose": purpose})
+
+
 class Planner(AgentMiddleware):
     state_schema = RunState
 
     def __init__(self, model: TextChatModel):
         super().__init__()
-        self.planner = model.with_structured_output(checks._Plan)
+        self.planner = _structured(model, checks._Plan, "planner")
 
     def before_agent(self, state, runtime) -> dict[str, Any] | None:
         if state.get("planned") == state.get("task"):
@@ -138,7 +142,7 @@ class Choice(AgentMiddleware):
 
     def __init__(self, model: TextChatModel):
         super().__init__()
-        self.planner = model.with_structured_output(checks._Plan)
+        self.planner = _structured(model, checks._Plan, "planner")
 
     def before_agent(self, state, runtime) -> dict[str, Any] | None:
         offered = state.get("suggestion")
@@ -213,11 +217,13 @@ class SessionPrompt(AgentMiddleware):
         toolkits = _toolkits(state)
         enabled = set(enabled_tools(toolkits))
         parts = [system_prompt(toolkits, state.get("skill"), state.get("plan"))]
-        declined = set(state.get("declined") or [])
-        settings = {"other_tools": {n: t.toolkit for n, t in TOOLS.items()
-                                    if n not in enabled and t.toolkit not in declined}}
-        if request.messages and _failed(request.messages[-1]):
-            settings["effort"] = config.EFFORT["executor_recover"]    # think harder after an error
+        settings = {}
+        if isinstance(request.model, TextChatModel):     # settings of the JSON reply protocol (text-only models)
+            declined = set(state.get("declined") or [])
+            settings["other_tools"] = {n: t.toolkit for n, t in TOOLS.items()
+                                       if n not in enabled and t.toolkit not in declined}
+            if request.messages and _failed(request.messages[-1]):
+                settings["effort"] = config.EFFORT["executor_recover"]    # think harder after an error
         return handler(request.override(system_message=SystemMessage(parts[0]),
                                         tools=[t for t in request.tools if t.name in enabled],
                                         model_settings={**request.model_settings, **settings}))
@@ -229,7 +235,7 @@ class RepeatGuard(AgentMiddleware):
 
     def __init__(self, finisher: TextChatModel):
         super().__init__()
-        self.finisher = finisher.with_structured_output(checks._Final)
+        self.finisher = _structured(finisher, checks._Final, "finisher")
 
     def wrap_tool_call(self, request, handler):
         call, messages = request.tool_call, request.state["messages"]
@@ -276,7 +282,7 @@ class RequestCheck(AgentMiddleware):
 
     def __init__(self, checker: TextChatModel):
         super().__init__()
-        self.checker = checker.with_structured_output(checks._ActionVerdict)
+        self.checker = _structured(checker, checks._ActionVerdict, "action_review")
 
     @staticmethod
     def _back(call: dict, text: str, check: str = "", issues=(), **update) -> dict:
@@ -310,7 +316,11 @@ class RequestCheck(AgentMiddleware):
                                   issues=[e.errors()[0]["msg"]], **update)
         if not tool or not approval_needed(call["name"], call["args"]):
             return update or None
-        problem = tool.check(args) if tool.check else None
+        token = credentials.CURRENT.set(run_id())         # the check may look up the user's lake catalogue
+        try:
+            problem = tool.check(args) if tool.check else None
+        finally:
+            credentials.CURRENT.reset(token)
         explain, notes, rejections, check = "", [], state.get("check_rejections", 0), "static"
         if not problem and call["name"] in config.REVIEWED_TOOLS:
             check = "request"
@@ -385,7 +395,7 @@ class AnswerCheck(AgentMiddleware):
 
     def __init__(self, reviewer: TextChatModel):
         super().__init__()
-        self.reviewer = reviewer.with_structured_output(checks._Verdict)
+        self.reviewer = _structured(reviewer, checks._Verdict, "reviewer")
 
     @hook_config(can_jump_to=["model"])
     def after_agent(self, state, runtime) -> dict[str, Any] | None:
@@ -433,14 +443,20 @@ STEP_ENDS = ["Choice.before_agent", "tools", "AnswerCheck.after_agent"]
 
 
 def build(chat, checkpointer):
-    """`chat` is an agent.adapter.ChatModel (backend). Breakpoints after STEP_ENDS make each invoke one step."""
-    model = TextChatModel(chat=chat)
-    middleware = [Planner(model.for_role("planner")), Choice(model.for_role("planner")), SessionPrompt()]
+    """`chat` is an agent.adapter.ChatModel (backend). Breakpoints after STEP_ENDS make each invoke one step.
+    A text-only backend is wrapped in TextChatModel (JSON reply protocol); a LangChain chat model (adapter
+    LangChainModel, `.lc`) is used as it is, with its native tool calling and structured output."""
+    native = getattr(chat, "lc", None)
+    base = native if native is not None else TextChatModel(chat=chat)
+
+    def role(purpose: str):
+        return base if native is not None else base.for_role(purpose)
+    middleware = [Planner(role("planner")), Choice(role("planner")), SessionPrompt()]
     if not getattr(chat, "remembers", False):           # a backend with memory keeps the history itself
-        middleware.append(SummarizationMiddleware(model=model.for_role("summariser"),
+        middleware.append(SummarizationMiddleware(model=role("summariser"),
                                                   trigger=("tokens", config.PROMPT_BUDGET_TOKENS),
                                                   keep=("messages", config.RECENT_TURNS * 2)))
-    middleware += [RequestCheck(model.for_role("action_review")), RepeatGuard(model.for_role("finisher")),
-                   approvals(), AnswerCheck(model.for_role("reviewer"))]
-    return create_agent(model.for_role("executor"), tools=lc_tools(), state_schema=RunState, middleware=middleware,
+    middleware += [RequestCheck(role("action_review")), RepeatGuard(role("finisher")),
+                   approvals(), AnswerCheck(role("reviewer"))]
+    return create_agent(role("executor"), tools=lc_tools(), state_schema=RunState, middleware=middleware,
                         checkpointer=checkpointer, interrupt_after=STEP_ENDS)

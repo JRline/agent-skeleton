@@ -12,12 +12,14 @@ API (JSON over HTTP, localhost only):
     GET  /views                      -> {"views": ["usage_limits", ...]}
     POST /query {"sql": "SELECT ..."} -> {"columns": [...], "rows": [[...]], "truncated": false}
     errors                           -> HTTP 400/401 with {"error": "..."}
-Optional settings (environment): MOCK_LAKE_PORT (8765), MOCK_LAKE_DATA (mock_lake/data), MOCK_LAKE_TOKEN (if set,
+Optional settings (environment): MOCK_LAKE_PORT (8765), MOCK_LAKE_DATA (mock_lake/data), MOCK_LAKE_USERS ("user:password,..."; if set, each
+client signs in with its own user ID and password, HTTP basic auth), MOCK_LAKE_TOKEN (if set,
 clients must send "Authorization: Bearer <token>"), MOCK_LAKE_LATENCY_MS (0; simulated network delay),
 MOCK_LAKE_MAX_ROWS (100000).
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sqlite3
@@ -52,7 +54,13 @@ class ReadOnlyLake:
         return {"columns": columns, "rows": [list(r) for r in rows[:max_rows]], "truncated": len(rows) > max_rows}
 
 
-def make_handler(lake: ReadOnlyLake, token: str = "", latency_ms: int = 0, max_rows: int = 100_000, quiet=False):
+def _users(spec: str) -> dict[str, str]:
+    """MOCK_LAKE_USERS="analyst:secret,other:pw" -> {user: password} (synthetic test accounts only)."""
+    return dict(item.split(":", 1) for item in spec.split(",") if ":" in item)
+
+
+def make_handler(lake: ReadOnlyLake, token: str = "", latency_ms: int = 0, max_rows: int = 100_000, quiet=False,
+                 users: dict[str, str] | None = None):
     class Handler(BaseHTTPRequestHandler):
         def _send(self, status: int, body: dict):
             data = json.dumps(body, default=str).encode()
@@ -65,7 +73,16 @@ def make_handler(lake: ReadOnlyLake, token: str = "", latency_ms: int = 0, max_r
         def _allowed(self) -> bool:
             if latency_ms:
                 time.sleep(latency_ms / 1000)
-            if token and self.headers.get("Authorization") != f"Bearer {token}":
+            auth = self.headers.get("Authorization", "")
+            if users:
+                try:
+                    user, _, password = base64.b64decode(auth.removeprefix("Basic ")).decode().partition(":")
+                except (ValueError, UnicodeDecodeError):
+                    user, password = "", ""
+                if not auth.startswith("Basic ") or users.get(user) != password:
+                    self._send(401, {"error": "Sign-in failed: wrong user ID or password."})
+                    return False
+            elif token and auth != f"Bearer {token}":
                 self._send(401, {"error": "Not authorised: send the read-only account's token."})
                 return False
             return True
@@ -97,15 +114,16 @@ def make_handler(lake: ReadOnlyLake, token: str = "", latency_ms: int = 0, max_r
 
 
 def serve(port: int = 8765, data_dir: Path = DATA, token: str = "", latency_ms: int = 0,
-          max_rows: int = 100_000, quiet=False) -> ThreadingHTTPServer:
+          max_rows: int = 100_000, quiet=False, users: dict[str, str] | None = None) -> ThreadingHTTPServer:
     """Build the server (bound to localhost only). Call serve_forever() on it; tests use port 0."""
     lake = ReadOnlyLake(data_dir)
-    return ThreadingHTTPServer(("127.0.0.1", port), make_handler(lake, token, latency_ms, max_rows, quiet))
+    return ThreadingHTTPServer(("127.0.0.1", port), make_handler(lake, token, latency_ms, max_rows, quiet, users))
 
 
 if __name__ == "__main__":
     server = serve(int(os.getenv("MOCK_LAKE_PORT", "8765")), DATA, os.getenv("MOCK_LAKE_TOKEN", ""),
-                   int(os.getenv("MOCK_LAKE_LATENCY_MS", "0")), int(os.getenv("MOCK_LAKE_MAX_ROWS", "100000")))
+                   int(os.getenv("MOCK_LAKE_LATENCY_MS", "0")), int(os.getenv("MOCK_LAKE_MAX_ROWS", "100000")),
+                   users=_users(os.getenv("MOCK_LAKE_USERS", "")))
     host, port = server.server_address[:2]
     print(f"Mock data lake (read-only, synthetic) on http://{host}:{port} serving {DATA}. Ctrl+C to stop.")
     try:

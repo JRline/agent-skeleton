@@ -19,7 +19,7 @@ import time
 
 import pandas as pd
 
-from . import config
+from . import config, credentials
 
 
 class LakeError(Exception):
@@ -126,7 +126,7 @@ class Lake:
         except LakeError:
             raise
         except Exception as e:
-            raise LakeError(f"Query failed: {e}") from e
+            raise LakeError(f"Query failed: {credentials.scrub(str(e))}") from None
         finally:
             conn.close()
         return pd.DataFrame([tuple(r) for r in rows[:limit]], columns=cols), len(rows) > limit
@@ -152,7 +152,7 @@ class Lake:
             cur.fetchmany(1)
             return [d[0] for d in cur.description]
         except Exception as e:
-            raise LakeError(f"Query failed: {e}") from e
+            raise LakeError(f"Query failed: {credentials.scrub(str(e))}") from None
         finally:
             conn.close()
 
@@ -232,11 +232,11 @@ def view_rules() -> str:
     return " ".join(lines)
 
 
-def static_problem(sql: str) -> str | None:
+def static_problem(sql: str, run_id: str | None = None) -> str | None:
     """Why a query would be refused (one SELECT on allowed views, required filters), checked without the server:
     a request with a problem goes back to the agent before the user is asked, never as a failed query."""
     try:
-        sql = check_select(sql, get_lake().list_views())
+        sql = check_select(sql, get_lake(run_id).list_views())
         check_required_filters(sql, required_filters())
     except LakeError as e:
         return str(e)
@@ -257,11 +257,38 @@ def view_notes() -> dict[str, str]:
     return ({"About the data": about} if about else {}) | notes
 
 
-def get_lake() -> Lake:
+def _module():
+    return importlib.import_module(config.DATALAKE)
+
+
+def needs_login() -> bool:
+    """Whether the lake asks for the user's own ID and password (the module sets NEEDS_LOGIN, a bool or a function)."""
+    if config.DATALAKE == "sqlite":
+        return False
+    flag = getattr(_module(), "NEEDS_LOGIN", False)
+    return bool(flag() if callable(flag) else flag)
+
+
+def get_lake(run_id: str | None = None) -> Lake:
+    """The lake as this conversation's user sees it. A lake that needs a login connects with the user's sign-in
+    (credentials.py, memory only); without one, every call says how to sign in."""
     if config.DATALAKE == "sqlite":
         return Lake("sqlite (in-process synthetic stand-in)", _sqlite_connect, _sqlite_views,
                     source=f"sqlite:{config.datalake_dir()}", partitions=_sqlite_partitions)
-    module = importlib.import_module(config.DATALAKE)
-    return Lake(getattr(module, "NAME", config.DATALAKE), module.connect, module.list_views,
-                getattr(module, "limit_sql", None), getattr(module, "source", lambda: "")(),
-                getattr(module, "partitions", None))
+    module, source = _module(), getattr(_module(), "source", lambda: "")()
+    connect, views, parts = module.connect, module.list_views, getattr(module, "partitions", None)
+    if needs_login():
+        login = credentials.login_for(run_id)
+
+        def signed_in():
+            if login is None:
+                raise LakeError("Not signed in to the data lake: enter your user ID and password under "
+                                "'Data lake sign-in' (or run the CLI with --lake-user).")
+            return login
+        connect = lambda: module.connect(login=signed_in())                                 # noqa: E731
+        views = lambda: module.list_views(login=signed_in())                                # noqa: E731
+        if parts is not None:
+            parts = lambda view: module.partitions(view, login=signed_in())                 # noqa: E731
+        source = f"{source or config.DATALAKE}#{login.user if login else ''}"   # each user's own catalogue view
+    return Lake(getattr(module, "NAME", config.DATALAKE), connect, views,
+                getattr(module, "limit_sql", None), source, parts)

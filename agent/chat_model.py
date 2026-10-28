@@ -163,6 +163,7 @@ class TextChatModel(BaseChatModel):
                 msgs.insert(0, {"role": "system", "content": block})
         effort = effort or self.effort
         stop = [OBSERVATION.strip()] if tools else None
+        base = msgs
         for attempt in range(config.MAX_REPAIRS + 2):
             if hasattr(self.chat, "last_send"):
                 self.chat.last_send = None
@@ -175,7 +176,9 @@ class TextChatModel(BaseChatModel):
                     raise ReplyError(f"Model kept replying outside the protocol: {str(e)[:300]}") from None
                 if attempt == config.MAX_REPAIRS:
                     effort = config.EFFORT["repair_escalate"]      # last attempt thinks harder
-                msgs = msgs + [{"role": "assistant", "content": reply[:4000]},
+                # Only the latest bad reply, shortened: long reasoning replies piled up in the prompt make small
+                # models slower and more confused with every repair.
+                msgs = base + [{"role": "assistant", "content": reply if len(reply) <= 400 else "…" + reply[-400:]},
                                {"role": "user", "content": f"Invalid output: {str(e)[:300]} "
                                                            "Reply again with exactly one JSON object as specified."}]
                 continue

@@ -320,3 +320,40 @@ class AppSmoke(TempDirs):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(AppTest is None, "streamlit not installed")
+class LakeSignIn(TempDirs):
+    """A lake that needs the user's own login: the sidebar asks for it and keeps it in memory only."""
+
+    def setUp(self):
+        super().setUp()
+        import threading
+        from mock_lake import server
+        srv = server.serve(0, config.datalake_dir(), quiet=True, users={"analyst": "s3cret-Pa55"})
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        for patch in (mock.patch.dict("os.environ", {"LLM_BACKEND": "fake", "MOCK_LAKE_LOGIN": "1",
+                                                     "MOCK_LAKE_URL": f"http://127.0.0.1:{srv.server_address[1]}"}),
+                      mock.patch.object(config, "DATALAKE", "agent.backends.datalake_mock")):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def sign_in(self, at, password):
+        at.text_input(key="lake_user").set_value("analyst")
+        at.text_input(key="lake_password").set_value(password)
+        at.button(key="FormSubmitter:lake_sign_in-Sign in").click().run()
+
+    def test_wrong_then_right_password(self):
+        at = AppTest.from_file(APP, default_timeout=30)
+        at.run()
+        self.sign_in(at, "nope")
+        self.assertTrue(any("Sign-in failed" in e.value for e in at.error))
+        self.assertNotIn("lake_login", [k for k in at.session_state if at.session_state[k]])
+        self.sign_in(at, "s3cret-Pa55")
+        self.assertFalse(at.exception)
+        self.assertTrue(any("Signed in as analyst" in s.value for s in at.success))
+        self.assertTrue(any("usage_limits" in m.value for m in at.markdown))   # the lake's views, as this user
+        at.button(key="lake_sign_out").click().run()
+        self.assertIsNone(at.session_state["lake_login"])

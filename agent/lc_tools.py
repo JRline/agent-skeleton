@@ -89,15 +89,17 @@ class ModelLog(BaseCallbackHandler):
     def __init__(self, rid: str):
         self.rid, self.started = rid, {}
 
-    def on_chat_model_start(self, serialized, messages, *, run_id, invocation_params=None, **kw):
-        self.started[run_id] = (time.perf_counter(), invocation_params or {})
+    def on_chat_model_start(self, serialized, messages, *, run_id, invocation_params=None, metadata=None, **kw):
+        params = dict(invocation_params or {})
+        params.setdefault("purpose", (metadata or {}).get("purpose") or "executor")   # native LangChain models
+        self.started[run_id] = (time.perf_counter(), params)
 
     def on_llm_end(self, response, *, run_id, **kw):
         t0, params = self.started.pop(run_id, (time.perf_counter(), {}))
         msg = response.generations[0][0].message
         meta = msg.response_metadata
         log({"run_id": self.rid}, "model", purpose=params.get("purpose"), effort=meta.get("effort"),
-            model=meta.get("model"), latency_ms=round((time.perf_counter() - t0) * 1000),
+            model=meta.get("model") or meta.get("model_name") or params.get("model") or params.get("_type"), latency_ms=round((time.perf_counter() - t0) * 1000),
             prompt_tokens=meta.get("prompt_tokens", 0), repairs=meta.get("repairs", 0),
             **{k: meta[k] for k in ("channel", "send", "sent_tokens") if k in meta},
             output=meta.get("raw") or msg.text or json.dumps(msg.tool_calls))

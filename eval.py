@@ -144,7 +144,7 @@ def run_suite(tasks: list[dict], make_model, backend: str, out_dir: Path | None 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--backend", choices=["fake", "ollama", "claude", "prod"], default=config.BACKEND)
+    ap.add_argument("--backend", choices=config.BACKENDS, default=config.BACKEND)
     ap.add_argument("--only", default="", help="comma-separated task ids")
     ap.add_argument("--tasks", default=str(GOLDEN_DIR), help="folder of task files")
     args = ap.parse_args()

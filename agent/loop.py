@@ -31,7 +31,6 @@ from .graph import build, intro
 from .lc_tools import ModelLog, next_ref
 from .memory import add_fact, context_block, default_title, earlier_tasks, load_state, log, new_state, persist  # noqa: F401
 from .skills import get_skill
-from .tools import quote_paths
 
 __all__ = ["new_state", "load_state", "run_one_step", "resolve_pending", "abort", "run", "continue_with", "rename"]
 

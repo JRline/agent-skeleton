@@ -20,8 +20,12 @@ SETTINGS_DIR = ROOT / "settings"     # user prompt settings (settings/prompts.js
 # ollama : local model on your Mac (agent/backends/ollama_api.py)
 # prod   : the production API module, imported by name
 # claude : Claude (Haiku by default) via the Claude Code CLI on this Mac (agent/backends/claude_cli.py)
+# api    : a real model behind an OpenAI-compatible API (agent/backends/openai_api.py: API_URL, API_MODEL, ...)
+# langchain : any LangChain chat model, used natively (LC_MODEL="provider:model"; needs its provider package)
 BACKEND = os.getenv("LLM_BACKEND", "fake")
 PROD_API_MODULE = os.getenv("PROD_API_MODULE", "existing_api_module")
+LC_MODEL = os.getenv("LC_MODEL", "")
+BACKENDS = ["fake", "ollama", "claude", "api", "langchain", "prod"]
 MODEL_RETRIES = 3
 
 # ---------------------------------------------------------------- data lake
