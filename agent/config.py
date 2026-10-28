@@ -68,6 +68,8 @@ PROMPT_BUDGET_TOKENS = 6000     # rough budget per model call (chars / 4)
 RECENT_TURNS = 6                # exchanges kept verbatim before summarising
 MAX_FACTS = 30
 OBS_PREVIEW_CHARS = 1500        # observation text sent back to the model
+KEEP_FULL_RESULTS = 3           # tool results the model sees in full; older ones shrink to one line with their ref
+SHORT_RESULT_CHARS = 300        # results this short are never shortened
 TOOL_TIMEOUT_S = int(os.getenv("TOOL_TIMEOUT_S", "30"))     # default limit for one tool call
 # A lake query on a large view can legitimately run for many minutes; only sql_query gets this longer limit,
 # so a stuck file read or search still fails fast.

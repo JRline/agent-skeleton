@@ -97,15 +97,20 @@ def _other_toolkits(state: dict) -> str:
 def cited_outputs(state: dict, final: str) -> str:
     """Stored outputs of the refs cited in FINAL, so the reviewer can trace every number.
     Facts keep only a short preview, which hid most of a table and made the reviewer reject good answers."""
-    parts, budget = [], config.REVIEW_CITED_CHARS
     inputs = {e.get("ref"): e.get("input") for e in read_log(state) if e["kind"] == "tool"}
+    texts = {}
     for ref in dict.fromkeys(re.findall(r"\[ref:\s*([\w\-]+)\s*\]", final)):
         path = run_dir(state) / "outputs" / f"{ref}.txt"
-        if budget <= 0 or not path.exists():
-            continue
-        text = path.read_text(errors="replace")[:budget]
-        parts.append(f"--- {ref} ---\ninput: {json.dumps(inputs.get(ref))}\n{text.strip()}")
-        budget -= len(text)
+        if path.exists():
+            texts[ref] = path.read_text(errors="replace")
+    # Shortest first, each with an even share of what is left: a large table cited first once cut a one-row total
+    # off mid-number, and the reviewer then rejected a correct answer.
+    shown, budget = {}, config.REVIEW_CITED_CHARS
+    for i, ref in enumerate(sorted(texts, key=lambda r: len(texts[r]))):
+        shown[ref] = texts[ref][:max(budget // (len(texts) - i), 0)]
+        budget -= len(shown[ref])
+    parts = [f"--- {ref} ---\ninput: {json.dumps(inputs.get(ref))}\n{shown[ref].strip()}"
+             + (" …[cut]" if len(shown[ref]) < len(texts[ref]) else "") for ref in texts]
     return "\n".join(parts) or "(no cited outputs found)"
 
 
@@ -183,7 +188,12 @@ def _shown_tables(tables) -> str:
 
 
 def _view_docs(state: dict) -> str:
-    """Documentation the agent read (describe_dataset): units, filters and calendars the answer may state."""
+    """Documentation the agent read (describe_dataset): units, filters and calendars the answer may state. Left out
+    when the data dictionary is already in the CONTEXT (an accepted skill's reference): the same text twice only
+    made the checkers' prompts longer."""
+    dictionary = str(config.datalake_dictionary().relative_to(config.SANDBOX_DIR))
+    if dictionary in context_docs(state):
+        return ""
     parts, seen = [], set()
     for ev in state["events"]:
         p = ev["payload"]

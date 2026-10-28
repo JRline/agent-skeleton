@@ -113,10 +113,13 @@ class Suggestions(LakeOff):
 class SkillReferences(TempDirs):
     def test_an_active_skill_brings_its_reference_documents(self):
         self.assertIn("references/datalake_dictionary.md", get_skill("usage_comparison").references)
-        with_skill = first_prompt(new_state("trend", skill="usage_comparison"))[1]["content"]
-        self.assertIn("Fiscal years run from 1 April to 31 March", with_skill)
-        without = first_prompt(new_state("What is CET1?"))[1]["content"]
-        self.assertNotIn("CONTEXT", without)
+        system, intro = (m["content"] for m in first_prompt(new_state("trend", skill="usage_comparison")))
+        self.assertIn("## Skill references", system)                   # with the skill, once it is accepted
+        self.assertIn("Fiscal years run from 1 April to 31 March", system)
+        self.assertNotIn("CONTEXT", intro)
+        without = first_prompt(new_state("What is CET1?"))
+        self.assertNotIn("## Skill references", without[0]["content"])
+        self.assertNotIn("CONTEXT", without[1]["content"])
 
     def test_attached_text_files_are_searchable(self):
         (config.inputs_dir() / "notes.md").write_text("Our buffer policy is described here.\n")

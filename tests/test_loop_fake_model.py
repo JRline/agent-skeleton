@@ -425,3 +425,88 @@ class CsvEvidence(LoopCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeanPrompts(LoopCase):
+    """Summaries until a toolkit is enabled or a skill accepted; the current step only; old results shortened."""
+
+    def test_an_accepted_skill_brings_its_steps_and_references_only_then(self):
+        from agent.memory import new_state
+        state = new_state("Compare RWA by division between two dates")
+        m = FakeModel({"planner": [j(plan=["Answer"], suggest={"skill": "usage_comparison", "why": "fits"})],
+                       "executor": [final("x")], "reviewer": [OK]})
+        run_one_step(state, m)
+        self.assertEqual(state["status"], "awaiting_choice")           # suggested: not in any prompt yet
+        resolve_pending(state, choice={"skill": "usage_comparison"})
+        run_one_step(state, m)
+        system = executor_prompts(m)[0][0]["content"]
+        self.assertIn("## SKILL: usage_comparison", system)
+        self.assertIn("## Skill references", system)
+        self.assertNotIn("CONTEXT", executor_prompts(m)[0][1]["content"])
+
+    def test_the_request_check_sees_the_current_step_only(self):
+        sql = "SELECT SUM(amount) AS rwa FROM usage_limits WHERE " + __import__("tests.helpers").helpers.STD + \
+              " AND scenario = 'USED' AND resource = 'RWA' AND as_of_date = '2026-03-26'"
+        m = FakeModel({"planner": [j(plan=["Read the file", "Query the total", "Answer"])],
+                       "executor": [tool_call("read_file", step_done=True, path="work/sample_capital.csv"),
+                                    tool_call("sql_query", sql=sql, save_as="t")]})
+        from agent.memory import new_state
+        state = new_state("goal")
+        for _ in range(3):
+            run_one_step(state, m)
+        self.assertEqual(state["status"], "awaiting_approval")
+        review = [c for c in m.calls if c["purpose"] == "action_review"][0]["messages"][-1]["content"]
+        step = review.split("CURRENT PLAN STEP:", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("Query the total", step)
+        self.assertNotIn("Read the file", step)
+        self.assertIn("## Current step\n2. Query the total", executor_prompts(m)[-1][0]["content"])
+
+    def test_old_results_are_shortened_but_keep_their_ref(self):
+        from agent.graph import compact
+        from langchain_core.messages import ToolMessage
+        big = [ToolMessage(json.dumps({"ok": True, "ref": f"read_file-{i}", "result": "head line\n" + "x" * 2000}),
+                           tool_call_id=str(i)) for i in range(5)]
+        out = compact(big, keep=3)
+        self.assertTrue(all(len(m.content) < 400 for m in out[:2]))
+        self.assertIn('"ref": "read_file-0"', out[0].content)
+        self.assertIn("head line", out[0].content)
+        self.assertEqual([m.content for m in out[2:]], [m.content for m in big[2:]])
+        self.assertGreater(len(big[0].content), 2000)                  # the graph's own copy stays whole
+
+    def test_checkers_do_not_get_the_dictionary_twice(self):
+        from agent.checks import _view_docs
+        from agent.memory import new_state
+        state = new_state("x", skill="usage_comparison")
+        out = config.RUNS_DIR / state["run_id"] / "outputs"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "describe_dataset-1.txt").write_text("view docs")
+        state["events"].append({"kind": "tool", "payload": {"tool": "describe_dataset", "input": {"view": "v"},
+                                                            "obs": {"ok": True, "ref": "describe_dataset-1"}}})
+        self.assertEqual(_view_docs(state), "")                         # the skill's dictionary covers it
+        state["skill"] = None
+        self.assertIn("view docs", _view_docs(state))
+
+
+class LeanerHistory(LoopCase):
+    def test_old_calls_keep_only_the_start_of_their_sql_or_code(self):
+        from agent.graph import compact
+        from langchain_core.messages import AIMessage
+        calls = [AIMessage("", tool_calls=[{"name": "run_python", "args": {"code": f"# step {i}\n" + "x = 1\n" * 100},
+                                            "id": str(i)}]) for i in range(4)]
+        out = compact(calls, keep=3)
+        self.assertLess(len(out[0].tool_calls[0]["args"]["code"]), 200)
+        self.assertTrue(out[0].tool_calls[0]["args"]["code"].startswith("# step 0"))
+        self.assertEqual(out[3].tool_calls, calls[3].tool_calls)
+
+    def test_a_small_cited_result_is_never_cut_by_a_large_one(self):
+        from agent.checks import cited_outputs
+        from agent.memory import new_state
+        state = new_state("g")
+        out = config.RUNS_DIR / state["run_id"] / "outputs"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "sql_query-1.txt").write_text("row\n" * 5000)
+        (out / "sql_query-2.txt").write_text("rows=1\ntotal\n245463\n")
+        text = cited_outputs(state, "Big [ref: sql_query-1], total 245,463 [ref: sql_query-2]")
+        self.assertIn("245463", text)
+        self.assertIn("…[cut]", text)
+        self.assertLessEqual(len(text), config.REVIEW_CITED_CHARS + 300)

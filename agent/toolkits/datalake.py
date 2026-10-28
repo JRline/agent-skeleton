@@ -11,7 +11,8 @@ from ..tools import ToolContext, ToolError, tool, _save_work, _table_preview
 _GUIDANCE = ("The data lake is a remote, read-only lake server: nothing can be loaded, uploaded or written "
              "to it. Attached files (INPUT FILES) are local and never part of it: read and analyse them with "
              "read_file and run_python, not with these tools. "
-             "Use list_datasets, then describe_dataset once per view, before writing SQL. "
+             "Use list_datasets, then describe_dataset once per view, before writing SQL, unless the view's "
+             "documentation is already in your Skill references: then write the SQL from it. "
              "SQL is for extraction and aggregation only: apply the required filters, select only the dates, "
              "scenario and resource you need, and GROUP BY to the level the analysis needs (e.g. date x "
              "division, never leaf rows). Views hold billions of rows on a shared server, so keep each extract "
@@ -83,6 +84,8 @@ def describe_dataset(args: DescribeArgs, ctx: ToolContext):
     lake = get_lake(ctx.run_id)
     cols = lake.describe(args.view)
     meaning = view_notes().get(args.view, "")
+    if meaning and str(config.datalake_dictionary().relative_to(config.SANDBOX_DIR)) in ctx.context:
+        meaning = "(The view's documentation is already in your Skill references; not repeated here.)"
     try:
         parts = lake.partitions(args.view)
     except Exception:                       # a catalogue that cannot list partitions is not an error

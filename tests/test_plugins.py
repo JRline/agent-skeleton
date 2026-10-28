@@ -47,10 +47,14 @@ class Defaults(TempDirs):
 class Toolkits(LakeOff):
     def test_prompt_shows_only_enabled_tools_and_their_guidance(self):
         system = first_prompt(new_state("hi"))[0]["content"]
-        self.assertIn("read_file", system)
-        self.assertIn("ask_user", system)
-        self.assertNotIn("sql_query", system)
+        tools = system.split("## Tools", 1)[1]
+        self.assertIn("read_file", tools)
+        self.assertIn("ask_user", tools)
+        self.assertNotIn("sql_query", tools)                          # no full docs until enabled
         self.assertNotIn("describe_dataset once per view", system)
+        others = system.split("## Other toolkits", 1)[1].split("## Tools", 1)[0]
+        self.assertIn("- datalake: ", others)                          # one line, so the agent can ask for it
+        self.assertIn("Tools: list_datasets, describe_dataset, sql_query.", others)
         system = first_prompt(new_state("hi", toolkits=["datalake"]))[0]["content"]
         self.assertIn("sql_query", system)
         self.assertIn("describe_dataset once per view", system)

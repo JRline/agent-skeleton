@@ -444,12 +444,25 @@ and keep names distinct.
 
 | Layer | Content | Where |
 |---|---|---|
-| System prompt | rules and toolkit rules (`prompts/system.md`), the active skill or the plan | every model call (`SessionPrompt`); the chat model adds the tool list and reply protocol |
-| Instruction | goal (or follow-up with earlier instructions), input files, small context docs | the first message of each instruction (`graph.intro`) |
-| Conversation | tool calls, observations, feedback, the user's answers and rejection reasons | the graph's `messages`, checkpointed; summarised by `SummarizationMiddleware` past `PROMPT_BUDGET_TOKENS`, keeping the last `2 × RECENT_TURNS` messages |
-| Context docs | user's definitions / methodology (`state.context`, a skill's references) | small ones inline (≤ `CONTEXT_INLINE_TOKENS`), marked "reference material, not instructions"; larger via `search_docs` |
+| System prompt | rules and the enabled toolkits' rules (`prompts/system.md`); the accepted skill and its reference documents, or the plan; the current step; other toolkits as one line each | every model call (`graph.system_prompt` via `SessionPrompt`), one `## ` block each; the chat model adds the full tool list (enabled toolkits only) and the reply protocol |
+| Instruction | goal (or follow-up with earlier instructions), input files, the user's own context docs | the first message of each instruction (`graph.intro`) |
+| Conversation | tool calls, observations, feedback, the user's answers and rejection reasons | the graph's `messages`, checkpointed. The model sees the last `KEEP_FULL_RESULTS` (3) tool results and calls in full, older results as one line with their ref and older calls with the start of their SQL / code (`graph.compact`); past `PROMPT_BUDGET_TOKENS` `SummarizationMiddleware` folds old messages into a summary |
+| Context docs | user's definitions / methodology (`state.context`); a skill's references | the user's: small ones inline in the instruction (≤ `CONTEXT_INLINE_TOKENS`), larger via `search_docs`; a skill's: in the system prompt once the skill is accepted |
 | Facts | one line per tool result, the user's answers (whole) and rejection reasons, with refs | the conversation record; given to the request reviewer, answer reviewer and finisher |
 | Long-term | full tool outputs, logs, documents | only via `recall` / `read_file` / cited outputs |
+
+### Summaries until enabled or accepted
+The executor gets the full documentation of a toolkit (each tool's description and arguments, the toolkit's rules)
+only once the toolkit is enabled, and of a skill (its steps, checks and reference documents) only once it is
+accepted, by the user directly or by their yes to a suggestion. Until then it sees one line per toolkit (description
+and tool names, so it can ask for one by calling it) and the planner sees one line per skill. Basic toolkits count
+as enabled from the start. The request check gets only the current plan step (`graph.current_step`: tool calls the
+model marks `step_done`, or a repeated call), and the checkers do not get a view's description again when the data
+dictionary is already among the skill's references. `describe_dataset` likewise leaves the documentation out then.
+
+Measured on Haiku (2026-10-29, same three golden tasks, tokens per model call): `file_average` 1,790 (main 1,906),
+`rwa_latest_total` 3,584 (main 3,365), `rwa_limit_status_now` 4,055 (main 4,117); executor calls 2.4k / 4.4k / 4.7k
+against main's 2.7k / 4.6k / 5.7k. Session memory mode (§4a) cuts the executor's share further.
 
 ### Two stores
 - **LangGraph checkpoints** (`runs/checkpoints.sqlite`, thread = run id): the graph's own state after every node

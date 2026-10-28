@@ -32,9 +32,10 @@ from .protocol import extract_json
 
 PROTOCOL = """## Reply protocol
 Reply with exactly ONE JSON object and nothing else, in one of these shapes:
-{"thought": "<one short sentence>", "tool": "<tool name>", "input": {<arguments>}}
+{"thought": "<one short sentence>", "tool": "<tool name>", "input": {<arguments>}, "step_done": false}
 {"thought": "<one short sentence>", "final": "<your answer to the user, markdown allowed>"}
 Use exactly one of "tool" or "final", and only the tools listed above, with inputs that match their arguments.
+Set "step_done": true when this tool call completes the current step.
 Call one tool at a time. Never write OBSERVATION yourself: after a tool call, stop and wait for it."""
 FORCED = """## Reply protocol
 Reply with exactly ONE JSON object and nothing else: {"tool": "<tool name>", "input": {<arguments>}}"""
@@ -100,7 +101,7 @@ def to_message(obj: dict, tools: list[dict], forced: bool, other_tools: dict | N
         name, args = obj["tool"], obj.get("input", obj.get("args", {}))
         if not isinstance(args, dict):
             raise ReplyError('"input" must be a JSON object.')
-        extra = {"thought": thought}
+        extra = {"thought": thought, "step_done": bool(obj.get("step_done"))}
         if name not in names:
             if name in (other_tools or {}):
                 extra["needs_toolkit"] = other_tools[name]        # the user decides (graph.RequestCheck)

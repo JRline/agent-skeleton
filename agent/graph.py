@@ -37,7 +37,7 @@ from .chat_model import ReplyError, TextChatModel
 UNUSABLE = (ReplyError, ValidationError, OutputParserException)   # a reply, not the backend, failed
 from .lc_tools import approval_needed, lc_tools, run_id
 from .memory import context_block, earlier_tasks, load_prompt, load_state, log, toolkit_guidance
-from .plugins import basic_toolkits, examples
+from .plugins import TOOLKITS, basic_toolkits, examples
 from .skills import get_skill, render_skill, render_skill_list
 from .tools import TOOLS, enabled_tools, quote_paths
 
@@ -176,25 +176,58 @@ def _failed(message) -> bool:
         return False
 
 
-def system_prompt(toolkits: list[str], skill: str | None = None, steps: list[str] | None = None) -> str:
-    """Rules and toolkit rules (agent/prompts/system.md), then the active skill or the plan. The tool list and the
-    reply protocol are added by the chat model."""
+def system_prompt(toolkits: list[str], skill: str | None = None, steps: list[str] | None = None,
+                  step: int | None = None, declined=()) -> str:
+    """What the executor knows in full, and what only by name (docs/design.md §7, "summaries until enabled"):
+    rules and the enabled toolkits' rules; the accepted skill with its reference documents, or the plan (the
+    current step marked); and the other toolkits as one line each, so the agent can ask for one. The full tool list
+    and the reply protocol are added by the chat model, for enabled toolkits only. Each part is its own `## ` block,
+    so a backend with memory receives it once and again only when it changes."""
     parts = [load_prompt("system", guidance=toolkit_guidance(toolkits))]
-    if get_skill(skill):
-        parts.append(render_skill(get_skill(skill)))
-    elif steps:
-        parts.append("## Plan\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1)))
+    active = get_skill(skill)
+    lines = [f"{i + 1}. {s}" for i, s in enumerate((active.steps if active else steps) or [])]
+    if active:
+        parts.append(render_skill(active))
+        refs = context_block({"skill": skill, "context": []})          # only once the skill is accepted
+        if refs:
+            parts.append("## Skill references\n" + refs)
+    elif lines:
+        parts.append("## Plan\n" + "\n".join(lines))
+    if step is not None and lines:                 # its own block: the plan block stays the same between steps
+        parts.append("## Current step\n" + (lines[step] if step < len(lines) else
+                                             "All plan steps are done: give the final answer."))
+    others = [f"- {n}: {k['description']} Tools: {', '.join(t.name for t in TOOLS.values() if t.toolkit == n)}."
+              for n, k in TOOLKITS.items() if n not in toolkits and n not in declined]
+    if others:
+        parts.append("## Other toolkits (not enabled: call one of their tools and the user is asked to enable it)\n"
+                     + "\n".join(others))
     return "\n\n".join(parts)
 
 
+def current_step(messages) -> int:
+    """Index of the plan step being worked on: tool calls marked step_done since this instruction began. Repeating
+    a call that worked also counts: small models often never mark a step done and repeat it instead."""
+    repeated = {m.tool_call_id for m in messages if isinstance(m, ToolMessage) and REPEAT_ERROR in str(m.content)}
+    done = 0
+    for m in messages:
+        if isinstance(m, HumanMessage) and str(m.content).startswith(("GOAL:", "NEW INSTRUCTION:")):
+            done = 0
+        elif isinstance(m, AIMessage) and m.tool_calls and (m.additional_kwargs.get("step_done")
+                                                            or m.tool_calls[0]["id"] in repeated):
+            done += 1
+    return done
+
+
 def intro(v: dict) -> str:
-    """The instruction as the executor sees it: goal (or follow-up), input files, reference documents."""
+    """The instruction as the executor sees it: goal (or follow-up), input files, the user's own context documents.
+    A skill's reference documents are not here: they belong to the skill (system_prompt) and arrive once it is
+    accepted."""
     text = f"GOAL: {v['goal']}" if not v.get("tasks") else (
         f"NEW INSTRUCTION: {v['goal']}\nEARLIER IN THIS CONVERSATION (their tool results are above and still "
         f"valid):\n{earlier_tasks(v)}")
     if v.get("inputs"):
         text += "\nINPUT FILES: " + quote_paths(v["inputs"])
-    block = context_block(v)
+    block = context_block({"context": v.get("context") or [], "skill": None, "inputs": v.get("inputs") or []})
     return text + ("\n\n" + block if block else "")
 
 
@@ -205,8 +238,38 @@ def first_prompt(v: dict) -> list[dict]:
     from .chat_model import PROTOCOL, render_tools
     toolkits = _toolkits(v)
     tools = [convert_to_openai_tool(t) for t in lc_tools() if t.name in enabled_tools(toolkits)]
-    system = system_prompt(toolkits, v.get("skill"), v.get("plan")) + "\n\n" + render_tools(tools) + "\n\n" + PROTOCOL
+    system = (system_prompt(toolkits, v.get("skill"), v.get("plan"), 0, v.get("declined") or ())
+              + "\n\n" + render_tools(tools) + "\n\n" + PROTOCOL)
     return [{"role": "system", "content": system}, {"role": "user", "content": intro(v)}]
+
+
+def compact(messages: list, keep: int | None = None) -> list:
+    """The model's view of the history: the last `keep` tool results in full, older ones as one line with their ref
+    (like the step machine's facts), so a long run does not resend every table and document. The graph keeps them
+    whole: the reviewers, the number check and the Sources list read the stored outputs."""
+    keep = config.KEEP_FULL_RESULTS if keep is None else keep
+    results = [i for i, m in enumerate(messages) if isinstance(m, ToolMessage)]
+    old = set(results[:-keep]) if keep else set(results)
+    calls = [i for i, m in enumerate(messages) if isinstance(m, AIMessage) and m.tool_calls]
+    old_calls = set(calls[:-keep]) if keep else set(calls)
+    out = []
+    for i, m in enumerate(messages):
+        if i in old_calls:                        # its own earlier SQL / code: the start is enough to recall it
+            call = m.tool_calls[0]
+            args = {k: (v[:160] + " …" if isinstance(v, str) and len(v) > 200 else v) for k, v in call["args"].items()}
+            if args != call["args"]:
+                m = m.model_copy(update={"tool_calls": [{**call, "args": args}]})
+        if i in old and len(str(m.content)) > config.SHORT_RESULT_CHARS:
+            try:
+                obs = json.loads(m.content)
+                line = str(obs.get("result") or obs.get("error") or "").split("\n", 1)[0][:200]
+                text = json.dumps({"ok": obs.get("ok"), "ref": obs.get("ref"),
+                                   "result": f"{line} …[earlier result, shortened; cite its ref]"}, ensure_ascii=False)
+            except (ValueError, AttributeError):
+                text = str(m.content)[:200] + " …[earlier result, shortened]"
+            m = m.model_copy(update={"content": text})
+        out.append(m)
+    return out
 
 
 class SessionPrompt(AgentMiddleware):
@@ -216,7 +279,8 @@ class SessionPrompt(AgentMiddleware):
         state = request.state
         toolkits = _toolkits(state)
         enabled = set(enabled_tools(toolkits))
-        parts = [system_prompt(toolkits, state.get("skill"), state.get("plan"))]
+        parts = [system_prompt(toolkits, state.get("skill"), state.get("plan"), current_step(request.messages),
+                               state.get("declined") or ())]
         settings = {}
         if isinstance(request.model, TextChatModel):     # settings of the JSON reply protocol (text-only models)
             declined = set(state.get("declined") or [])
@@ -224,7 +288,7 @@ class SessionPrompt(AgentMiddleware):
                                        if n not in enabled and t.toolkit not in declined}
             if request.messages and _failed(request.messages[-1]):
                 settings["effort"] = config.EFFORT["executor_recover"]    # think harder after an error
-        return handler(request.override(system_message=SystemMessage(parts[0]),
+        return handler(request.override(system_message=SystemMessage(parts[0]), messages=compact(request.messages),
                                         tools=[t for t in request.tools if t.name in enabled],
                                         model_settings={**request.model_settings, **settings}))
 
@@ -342,7 +406,10 @@ class RequestCheck(AgentMiddleware):
                    if c["name"] == call["name"]]
         previous = str(earlier[-1]["args"].get("sql") or earlier[-1]["args"].get("code") or
                        earlier[-1]["args"].get("path") or "") if earlier else None
-        return review_request(self.checker, view(), call["name"], call["args"], state.get("plan") or [], previous)
+        plan = state.get("plan") or []
+        step = current_step(state["messages"])
+        current = [plan[step]] if step < len(plan) else []         # the step the request serves, as the old engine did
+        return review_request(self.checker, view(), call["name"], call["args"], current, previous)
 
 
 def review_request(checker, v: dict, tool: str, args: dict, steps: list[str] | None = None,
@@ -356,7 +423,7 @@ def review_request(checker, v: dict, tool: str, args: dict, steps: list[str] | N
     if previous is None:
         previous = checks._previous_request(v, tool)
     prompt = load_prompt("action_review", goal=v.get("goal", ""), tool=tool,
-                         step="; ".join(steps or v.get("plan") or []) or "Finish the goal.",
+                         step="; ".join(steps if steps is not None else (v.get("plan") or [])[:1]) or "Finish the goal.",
                          request=request + (f"\n{json.dumps(extra)}" if extra else ""),
                          earlier=checks._earlier_requests(v), previous=previous[:3000] or "(none)",
                          facts="\n".join(f"- {f}" for f in v.get("facts", [])) or "(none)",

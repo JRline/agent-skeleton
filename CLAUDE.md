@@ -131,6 +131,10 @@ or the module's `list_views`).
 - Verified 2026-10-29: all 283 unit tests pass (Python 3.14 venv with requirements.txt), CLI demo runs, and two
   golden tasks on Haiku (`file_average`, `rwa_latest_total`) score 1.00. The full golden eval has not been run on
   this branch yet.
+- Leaner prompts (2026-10-29): toolkits and skills are one-line summaries until enabled or accepted, then their
+  full docs; the request check gets the current step only; old tool results and calls are shortened (refs kept);
+  no repeated view docs. Three Haiku tasks score 1.00 at 1.8k / 3.6k / 4.1k tokens per call, level with main
+  (1.9k / 3.4k / 4.1k). 289 unit tests pass.
 
 ## Next tasks, in order
 1. Pin `requirements.txt` to production's exact Python and package versions (ask the owner). The grid number
