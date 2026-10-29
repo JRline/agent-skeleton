@@ -31,7 +31,8 @@ connection_env: LAKE_ODBC  # odbc: env variable with the connection string WITHO
 Notes every dataset of this connector shares (calendar, units, how dates work).
 ```
 - Built-in kinds live in `agent/connectors/`: `odbc` (pyodbc; UID and PWD come from the user's sign-in),
-  `mock` (the local mock lake server, `url`), `sqlite` (a folder of CSVs, `data`). Use `custom` only when none
+  `mock` (the local mock lake server, `url`), `sqlite` (a folder of CSVs, `data`). Set `dialect` to the server's SQL
+  dialect as sqlglot names it (e.g. trino, tsql, oracle, postgres): queries are read and row limits written in it. Use `custom` only when none
   fits: `connector.py` provides `connect(connector, login)`, `list_datasets(connector, login)` and optionally
   `partitions(connector, dataset, column, login)`, `limit_sql(sql, n)`, `source(connector)`. Read-only, always.
 - Sign-in: with `needs_login: yes` the sidebar shows **Data sign-in: <name>** (CLI `--sign-in name=user`). The

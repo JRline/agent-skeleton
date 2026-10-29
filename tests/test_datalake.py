@@ -31,6 +31,36 @@ class SqlGuard(TempDirs):
     def test_keywords_inside_strings_do_not_trip_the_guard(self):
         check_select("SELECT * FROM capital_components WHERE entity = 'Drop Bank'", VIEWS)
 
+    def test_the_query_is_parsed_not_searched_for_keywords(self):
+        """Columns named like keywords are fine; a dataset hidden in a subquery or after a comment is still found."""
+        check_select("SELECT entity AS set_name, period AS copy FROM capital_components -- delete later", VIEWS)
+        for sql in ["SELECT * FROM (SELECT * FROM secret_view) AS s",
+                    "SELECT * FROM capital_components WHERE entity IN (SELECT entity FROM /* x */ secret_view)",
+                    "WITH c AS (SELECT * FROM secret_view) SELECT * FROM c"]:
+            with self.assertRaisesRegex(LakeError, "secret_view", msg=sql):
+                check_select(sql, VIEWS)
+        with self.assertRaisesRegex(LakeError, "Only SELECT"):
+            check_select("PRAGMA table_info(capital_components)", VIEWS)
+
+    def test_row_limits_follow_the_dialect_and_never_raise_a_query_limit(self):
+        from agent.datalake import limit_sql
+        self.assertEqual(limit_sql("SELECT a FROM t", 5), "SELECT a FROM t LIMIT 5")
+        self.assertEqual(limit_sql("SELECT a FROM t", 5, "tsql"), "SELECT TOP 5 a FROM t")
+        self.assertIn("FETCH FIRST 5 ROWS ONLY", limit_sql("SELECT a FROM t", 5, "oracle"))
+        wrapped = limit_sql("SELECT a FROM t ORDER BY a LIMIT 3", 5001)
+        self.assertIn("LIMIT 3", wrapped)                               # the query's own limit is kept
+        self.assertTrue(wrapped.endswith("LIMIT 5001"))
+
+    def test_required_filters_are_found_in_the_parsed_query(self):
+        from agent.datalake import check_required_filters
+        req = {"capital_components": [["period"], ["entity", "GROUP BY"]]}
+        check_required_filters("SELECT entity, SUM(x) FROM capital_components WHERE period IN ('2026Q3') "
+                               "GROUP BY entity", req)
+        check_required_filters("SELECT * FROM capital_components c JOIN rwa_by_risk_type r ON c.entity = r.entity "
+                               "AND c.period = '2026Q3' WHERE c.entity = 'A'", req)
+        with self.assertRaisesRegex(LakeError, "period"):               # named in SELECT only: not a filter
+            check_required_filters("SELECT period, entity FROM capital_components GROUP BY period, entity", req)
+
 
 USAGE_RWA = f"scenario = 'USED' AND resource = 'RWA' AND {STD}"
 

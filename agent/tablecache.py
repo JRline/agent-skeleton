@@ -1,10 +1,11 @@
 """Parse each table file once per version, then reuse it (IO cost: a 50k-row Excel file takes ~1.3 s to parse,
-its pickle ~0 s).
+its Parquet copy a few ms).
 
 A version is (resolved path, modification time, size) plus the reader's arguments, so an edited or re-uploaded
-file is parsed again automatically. Two levels: a small in-memory cache in this process, and pickles in
-sandbox/work/.cache/ that the analysis subprocess loads instead of parsing. Only the agent writes these pickles;
-model-written code cannot write files and may not call read_pickle, so it never chooses what is unpickled.
+file is parsed again automatically. Two levels: a small in-memory cache in this process, and Parquet files in
+sandbox/work/.cache/ that the analysis subprocess loads instead of parsing. Parquet is plain data (loading it runs
+no code, unlike a pickle). A table Parquet cannot hold (a column mixing numbers and text, e.g. a "Total" row in a
+number column) is kept in memory only, and the analysis subprocess parses its file itself.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from . import config
 
 _MEMORY: OrderedDict[str, pd.DataFrame] = OrderedDict()
 _MEMORY_ITEMS = 8
+_UNSTORABLE: set[str] = set()       # file versions Parquet cannot hold (mixed columns)
 
 
 def cache_dir() -> Path:
@@ -27,6 +29,7 @@ def cache_dir() -> Path:
 
 def clear_memory() -> None:
     _MEMORY.clear()
+    _UNSTORABLE.clear()
 
 
 def kwargs_key(kwargs: dict | None) -> str:
@@ -58,40 +61,54 @@ def load(path: Path, **kwargs) -> pd.DataFrame:
     if key in _MEMORY:
         _MEMORY.move_to_end(key)
         return _MEMORY[key]
-    pkl = cache_dir() / f"{key}.pkl"
-    if pkl.is_file():
-        df = pd.read_pickle(pkl)
+    cached = cache_dir() / f"{key}.parquet"
+    if cached.is_file():
+        df = pd.read_parquet(cached)
     else:
         df = read(path, **kwargs)
-        _write(pkl, df)
+        _write(cached, df)
     _remember(key, df)
     return df
 
 
-def pickle_for(path: Path, kwargs: dict | None = None) -> Path | None:
-    """Pickle of this file version for the analysis subprocess, created if needed. None if it cannot be read."""
+def cached_file(path: Path, kwargs: dict | None = None) -> Path | None:
+    """Parquet copy of this file version for the analysis subprocess, created if needed. None if the file cannot
+    be read or Parquet cannot hold the table: the subprocess then parses the file itself."""
     try:
         key = _key(path, kwargs)
-        pkl = cache_dir() / f"{key}.pkl"
-        if not pkl.is_file():
-            _write(pkl, _MEMORY.get(key) if key in _MEMORY else read(path, **(kwargs or {})))
-        return pkl
+        cached = cache_dir() / f"{key}.parquet"
+        if cached.is_file():
+            return cached
+        if key in _UNSTORABLE:
+            return None
+        df = _MEMORY.get(key) if key in _MEMORY else read(path, **(kwargs or {}))
+        _remember(key, df)
+        if _write(cached, df):
+            return cached
+        _UNSTORABLE.add(key)          # tried once per file version: not parsed again just to fail again
     except Exception:                 # unreadable or bad arguments: the code's own read will report it
-        return None
+        pass
+    return None
 
 
 def store(path: Path, df: pd.DataFrame) -> None:
     """A table the agent has just written (work tables): cache it so the next step need not parse it."""
     key = _key(path, None)
-    _write(cache_dir() / f"{key}.pkl", df)
+    _write(cache_dir() / f"{key}.parquet", df)
     _remember(key, df)
 
 
-def _write(pkl: Path, df: pd.DataFrame) -> None:
-    pkl.parent.mkdir(parents=True, exist_ok=True)
-    tmp = pkl.with_suffix(".tmp")
-    df.to_pickle(tmp)
-    tmp.replace(pkl)                  # atomic: a half-written pickle is never read
+def _write(target: Path, df: pd.DataFrame) -> bool:
+    """Whether the table could be stored as Parquet."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(".tmp")
+    try:
+        df.to_parquet(tmp, index=False)
+    except Exception:                 # e.g. a column mixing numbers and text: kept in memory only
+        tmp.unlink(missing_ok=True)
+        return False
+    tmp.replace(target)               # atomic: a half-written file is never read
+    return True
 
 
 def _remember(key: str, df: pd.DataFrame) -> None:

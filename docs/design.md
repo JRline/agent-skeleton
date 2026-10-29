@@ -87,12 +87,12 @@ agent/              # the framework (fixed)
   tools.py          # @tool registry, shared helpers, dispatch (tools live in toolkits)
   toolkits/         # built-in toolkits, all basic: files, docs, analysis, datalake
   pysandbox.py      # model-written analysis code: static check, then an isolated run via _pyrunner.py
-  tablecache.py     # each table file parsed once per version (memory + pickles in sandbox/work/.cache/)
+  tablecache.py     # each table file parsed once per version (memory + Parquet in sandbox/work/.cache/)
   replay.py         # exports a conversation as one replayable analysis script (§13)
-  export.py         # exports a conversation as one self-contained HTML page (§12)
+  export.py         # exports a conversation as one self-contained HTML page (§12; templates/conversation.html, Jinja2)
   workbook.py       # Excel layout reader (table blocks, header rows, totals, formulas) and read_range
   outputs.py        # tool outputs as tables (shared by the UI and the HTML export)
-  sqlfmt.py         # SQL for people: one clause per line (approval cards, Sources, replay); never changes what runs
+  sqlfmt.py         # SQL for people (sqlglot's pretty printer): approval cards, Sources, replay; display only
   skills.py         # parse extensions/skills/*.md, list/render skills
   memory.py         # the conversation record (state.json), persistence, log.jsonl, prompt and context helpers
   prompts/          # system.md, planner.md, reviewer.md, action_review.md, finisher.md
@@ -386,7 +386,8 @@ Group's RWA and leverage exposure under JFSA Basel III in JPY millions, Tokyo bu
 - Hierarchies as `<dimension>_generation_<n>`: measure (resource > risk type > approach, JFSA OV1 / LR2), region
   and book (group > division > business line > product); one `amount` column; leaf rows only.
 - No latest flag: each resource and version has its own latest date (CLOSED lags EARLY, leverage lags RWA). Writes are refused twice: by
-`check_select` (one SELECT/WITH statement, no DML/DDL keywords, documented datasets only) and by a read-only
+`check_select` (the query parsed by sqlglot: one SELECT/WITH/UNION statement, no write, DDL or SELECT INTO
+anywhere in it, documented datasets only, subqueries and CTEs included) and by a read-only
 connection (SQLite authorizer; read-only lake account).
 Query results are saved as work tables, and later tools take the path: the model never retypes numbers.
 
@@ -408,8 +409,10 @@ preview, and the `read_range(path, sheet, range, header_rows)` call that loads a
 allowed at run time only, so pandas date parsing works; the static check still refuses them in the code.
 
 **IO cost.** Datasets can hold billions of rows and input files 50k+, so the design avoids needless reads:
-- Every query asks the server for at most `MAX_SQL_ROWS` + 1 rows (`datalake.limit_sql` appends `LIMIT`, or
-  wraps a query that has its own; a connection kind may supply `limit_sql` for its dialect). Columns come from a
+- Every query asks the server for at most `MAX_SQL_ROWS` + 1 rows (`datalake.limit_sql`, written by sqlglot in
+  the connector's `dialect`: LIMIT, TOP or FETCH FIRST; a query with its own limit is wrapped so the cap never
+  raises it; a connection kind may still supply `limit_sql`). The query then runs as sqlglot writes it back in the
+  same dialect, so `dialect` must name the server's dialect. Columns come from a
   zero-row query; `describe_dataset` returns no data rows.
 - A result over `MAX_SQL_ROWS` is refused, not truncated: nothing is saved and the model is told to filter (WHERE)
   and aggregate (GROUP BY, SUM/COUNT/AVG) in SQL to the level the goal needs, then run it again (or, when the
@@ -438,7 +441,8 @@ allowed at run time only, so pandas date parsing works; the static check still r
   (`runs/<id>/sql_cache.json`) and says so; `refresh: true` forces a new query.
 - Each table file version (path, mtime, size, reader arguments) is parsed once (`tablecache`): `read_file`,
   `tables`, `read_table`, literal `pd.read_*` calls in analysis code (found by AST before the run) and work tables
-  (cached when written) are loaded from memory or a pickle. Only the agent writes the pickles. A 50k-row Excel
+  (cached when written) are loaded from memory or a Parquet copy (plain data: loading it runs no code). A table
+  Parquet cannot hold (a column mixing numbers and text) is kept in memory only, and the analysis process parses it. A 50k-row Excel
   file is parsed once (~0.5–1.3 s) instead of on every read.
 - `read_file` stores `READ_FILE_STORED_ROWS` rows under its ref, not a copy of the file; the citation check
   indexes each stored output's numbers once; the UI reads tables and outputs once per version and shows at most

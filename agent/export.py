@@ -2,7 +2,8 @@
 
 Each instruction: the request (with attached files), its steps folded (what each request did, the SQL formatted,
 the code, result tables), the answer with its tables, and the sources its [ref] links point to. Inline styles,
-no scripts and no internet needed, so it opens offline and can be mailed or archived. Standard library only.
+no scripts and no internet needed, so it opens offline and can be mailed or archived. The page is the Jinja2
+template templates/conversation.html (values escaped automatically); this module prepares its data.
 """
 from __future__ import annotations
 
@@ -12,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+from jinja2 import Environment, FileSystemLoader
+from markupsafe import Markup
 
 from . import config
 from .memory import read_log, run_dir
@@ -19,30 +22,8 @@ from .outputs import parse_output
 from .sqlfmt import format_sql
 
 MAX_ROWS = 200                 # rows of a result table in the export (the CSV in work/ has them all)
-
-_CSS = """
-:root { --bg:#fbfbfa; --fg:#1d2321; --muted:#5f6b68; --rule:#d9dfdd; --req:#fdecec; --req-edge:#d64545;
-  --ans:#eaf6ec; --ans-edge:#2e8b47; --code:#f1f3f2; }
-@media (prefers-color-scheme: dark) { :root { --bg:#141817; --fg:#e4ebe9; --muted:#9aaaa6; --rule:#2c3634;
-  --req:#3a2020; --req-edge:#e06565; --ans:#1b2f22; --ans-edge:#56b971; --code:#1d2523; } }
-body { background:var(--bg); color:var(--fg); font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;
-  margin:0; padding:24px max(16px, 4vw); }
-main { max-width:900px; margin:0 auto; }
-h1 { font-size:26px; margin:0 0 4px; } .meta { color:var(--muted); font-size:13px; margin-bottom:24px; }
-.req, .ans { border-radius:8px; padding:12px 16px; margin:18px 0 8px; }
-.req { background:var(--req); border-left:4px solid var(--req-edge); }
-.ans { background:var(--ans); border:1px solid var(--ans-edge); }
-.label { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
-details { border:1px solid var(--rule); border-radius:8px; padding:8px 12px; margin:8px 0; }
-summary { cursor:pointer; color:var(--muted); }
-.step { border-top:1px solid var(--rule); padding:8px 0; } .step:first-of-type { border-top:none; }
-pre { background:var(--code); padding:10px 12px; border-radius:6px; overflow-x:auto; font-size:13px; }
-code { font-family:ui-monospace,Menlo,Consolas,monospace; }
-.table-wrap { overflow-x:auto; margin:8px 0; }
-table { border-collapse:collapse; font-size:13px; } th, td { border:1px solid var(--rule); padding:4px 8px; text-align:left; }
-td.num { text-align:right; font-variant-numeric:tabular-nums; } .caption { color:var(--muted); font-size:12px; }
-.files { color:var(--muted); font-size:13px; } sup a { text-decoration:none; }
-"""
+_PAGE = Environment(loader=FileSystemLoader(Path(__file__).parent / "templates"), autoescape=True,
+                    trim_blocks=True).get_template("conversation.html")
 
 
 def export_html(state: dict) -> Path:
@@ -55,20 +36,14 @@ def export_html(state: dict) -> Path:
 
 def build_html(state: dict) -> str:
     models = sorted({e.get("model") for e in read_log(state) if e.get("kind") == "model" and e.get("model")})
-    title = state.get("title") or state["run_id"]
-    parts = [f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,"
-             f"initial-scale=1'><title>{_e(title)}</title><style>{_CSS}</style></head><body><main>",
-             f"<h1>{_e(title)}</h1><div class='meta'>Conversation {_e(state['run_id'])} · exported "
-             f"{datetime.now():%Y-%m-%d %H:%M} · model(s) {_e(', '.join(models) or 'n/a')}</div>"]
-    for n, (request, steps, finals) in enumerate(_segments(state), 1):
-        parts.append(_request(request))
-        if steps:
-            body = "".join(_step(state, ev) for ev in steps)
-            parts.append(f"<details><summary>How I got here · {len(steps)} steps</summary>{body}</details>")
-        for ev in finals:
-            parts.append(_answer(state, ev, n))
-    parts.append("</main></body></html>")
-    return "".join(parts)
+    segments = [{"goal": Markup(_md(request["payload"]["goal"])),
+                 "files": [Path(f).name for f in request["payload"].get("files") or []],
+                 "steps": [s for s in (_step(ev) for ev in steps) if s],
+                 "answers": [_answer(state, ev, n) for ev in finals]}
+                for n, (request, steps, finals) in enumerate(_segments(state), 1)]
+    return _PAGE.render(title=state.get("title") or state["run_id"], run_id=state["run_id"],
+                        exported=f"{datetime.now():%Y-%m-%d %H:%M}", models=", ".join(models) or "n/a",
+                        segments=segments)
 
 
 def _segments(state: dict):
@@ -82,56 +57,42 @@ def _segments(state: dict):
         yield seg[0], [e for e in seg[1:] if e["kind"] != "final"], [e for e in seg[1:] if e["kind"] == "final"]
 
 
-def _request(ev: dict) -> str:
-    p = ev["payload"]
-    files = "".join(f"📎 {_e(Path(f).name)} " for f in p.get("files") or [])
-    return (f"<div class='req'><div class='label'>Your request</div><div>{_md(p['goal'])}</div>"
-            + (f"<div class='files'>{files}</div>" if files else "") + "</div>")
+def _code(inp: dict) -> str:
+    return format_sql(inp["sql"]) if inp.get("sql") else inp.get("code") or ""
 
 
-def _step(state: dict, ev: dict) -> str:
+def _step(ev: dict) -> dict | None:
+    """One step of the folded "How I got here" list, as data for the template."""
     kind, p = ev["kind"], ev["payload"]
     if kind == "plan":
-        return "<div class='step'><b>Plan</b><ol>" + "".join(f"<li>{_e(s)}</li>" for s in p.get("plan", [])) + "</ol></div>"
+        return {"kind": "plan", "plan": p.get("plan", [])}
     if kind == "approval":
-        inp = p.get("input") or {}
-        body = f"<div class='step'><b>Asked to approve</b> <code>{_e(p.get('tool', ''))}</code>"
-        if p.get("explain"):
-            body += f"<div>{_e(p['explain'])}</div>"
-        if inp.get("sql"):
-            body += f"<pre><code>{_e(format_sql(inp['sql']))}</code></pre>"
-        elif inp.get("code"):
-            body += f"<pre><code>{_e(inp['code'])}</code></pre>"
-        return body + "</div>"
+        return {"kind": "approval", "tool": p.get("tool", ""), "explain": p.get("explain"),
+                "code": _code(p.get("input") or {})}
     if kind in ("tool", "user") and p.get("tool"):
         obs = p.get("obs") or {}
         head = ("Approved" if p.get("approved") else "Rejected") if kind == "user" else "Ran"
-        body = f"<div class='step'><b>{head}</b> <code>{_e(p['tool'])}</code>"
-        if kind == "tool" and (p.get("input") or {}).get("sql"):
-            body += f"<pre><code>{_e(format_sql(p['input']['sql']))}</code></pre>"
-        if obs:
-            body += _output(str(obs.get("result") or obs.get("error") or ""))
-        return body + "</div>"
+        sql = (p.get("input") or {}).get("sql") if kind == "tool" else None
+        return {"kind": "ran", "head": head, "tool": p["tool"], "code": format_sql(sql) if sql else "",
+                "output": _output(str(obs.get("result") or obs.get("error") or "")) if obs else None}
     if kind == "user" and "answer" in p:
-        return f"<div class='step'><b>Question</b> {_e(p.get('question', ''))}<br><b>Answer</b> {_e(p['answer'])}</div>"
+        return {"kind": "answered", "question": p.get("question", ""), "answer": p["answer"]}
     if kind in ("review", "precheck"):
-        issues = "".join(f"<li>{_e(i)}</li>" for i in p.get("issues", []))
-        label = "Reviewer asked for changes" if kind == "review" else "Request sent back before approval"
-        return f"<div class='step'><b>{label}</b><ul>{issues}</ul></div>"
+        return {"kind": "issues", "issues": p.get("issues", []),
+                "label": "Reviewer asked for changes" if kind == "review" else "Request sent back before approval"}
     if kind == "ask_user":
-        return f"<div class='step'><b>Question to you</b> {_e(p.get('question', ''))}</div>"
-    return ""
+        return {"kind": "asked", "question": p.get("question", "")}
+    return None
 
 
-def _output(text: str) -> str:
+def _output(text: str) -> dict:
     caption, table, rest = parse_output(text)
     if table is not None:
-        return (f"<div class='caption'>{_e(caption.replace('`', ''))}</div>{_table(table)}"
-                + (f"<div class='caption'>{_e(rest)}</div>" if rest else ""))
-    return f"<pre>{_e(text[:3000])}</pre>"
+        return {"caption": caption.replace("`", ""), "table": _table(table), "rest": rest}
+    return {"text": text[:3000]}
 
 
-def _answer(state: dict, ev: dict, n: int) -> str:
+def _answer(state: dict, ev: dict, n: int) -> dict:
     p = ev["payload"]
     refs: list[str] = []
 
@@ -152,48 +113,37 @@ def _answer(state: dict, ev: dict, n: int) -> str:
 
     body = _md(re.sub(r"\[(ref|doc):\s*([^\]]+)\]", hold, p["text"]))
     body = re.sub(r"CITE(\d+)END", lambda m: links[int(m.group(1))], body)
-    tables = ""
+    tables = []
     for path in p.get("tables", []):
         full = config.SANDBOX_DIR / path
         if full.is_file():
             title = (p.get("table_titles") or {}).get(path) or Path(path).stem.replace("_", " ")
-            tables += f"<div class='caption'><b>{_e(title)}</b></div>{_table(pd.read_csv(full))}"
-    sources = ""
-    if refs:
-        items = "".join(f"<li id='s{n}-{k}'>{_source(state, name)}</li>" for k, name in enumerate(refs, 1))
-        sources = f"<details><summary>Sources</summary><ol>{items}</ol></details>"
+            tables.append({"title": title, "table": _table(pd.read_csv(full))})
     from .loop import answer_timing, describe_timing
     timing = answer_timing(state).get(ev.get("ts"))
-    when = f"<div class='caption'>{_e(describe_timing(timing))}</div>" if timing else ""
-    return f"<div class='ans'><div class='label'>Answer</div>{when}{body}{tables}</div>{sources}"
+    return {"when": describe_timing(timing) if timing else "", "body": Markup(body), "tables": tables,
+            "sources": [{"id": f"s{n}-{k}", "name": name, **_source(state, name)} for k, name in enumerate(refs, 1)]}
 
 
-def _source(state: dict, name: str) -> str:
+def _source(state: dict, name: str) -> dict:
     for ev in state["events"]:
         obs = ev["payload"].get("obs") or {}
         if obs.get("ref") == name:
             stored = run_dir(state) / "outputs" / f"{name}.txt"
             text = stored.read_text(errors="replace") if stored.is_file() else str(obs.get("result", ""))
-            inp = ev["payload"].get("input") or {}
-            code = (f"<pre><code>{_e(format_sql(inp['sql']))}</code></pre>" if inp.get("sql") else
-                    f"<pre><code>{_e(inp['code'])}</code></pre>" if inp.get("code") else "")
-            return f"<code>{_e(name)}</code>{code}{_output(text)}"
-    return f"<code>{_e(name)}</code> (document or earlier source)"
+            return {"found": True, "code": _code(ev["payload"].get("input") or {}), "output": _output(text)}
+    return {"found": False}
 
 
-def _table(df: pd.DataFrame) -> str:
-    head = "".join(f"<th>{_e(str(c))}</th>" for c in df.columns)
-    rows = []
-    for row in df.head(MAX_ROWS).itertuples(index=False, name=None):
-        cells = []
-        for v in row:
-            num = isinstance(v, (int, float)) and not isinstance(v, bool)
-            text = "" if v is None or (isinstance(v, float) and pd.isna(v)) else (
-                f"{v:,.2f}".rstrip("0").rstrip(".") if isinstance(v, float) else f"{v:,}" if num else str(v))
-            cells.append(f"<td class='num'>{_e(text)}</td>" if num else f"<td>{_e(text)}</td>")
-        rows.append("<tr>" + "".join(cells) + "</tr>")
-    more = f"<div class='caption'>first {MAX_ROWS:,} of {len(df):,} rows</div>" if len(df) > MAX_ROWS else ""
-    return f"<div class='table-wrap'><table><tr>{head}</tr>{''.join(rows)}</table></div>{more}"
+def _table(df: pd.DataFrame) -> dict:
+    def cell(v):
+        num = isinstance(v, (int, float)) and not isinstance(v, bool)
+        text = "" if v is None or (isinstance(v, float) and pd.isna(v)) else (
+            f"{v:,.2f}".rstrip("0").rstrip(".") if isinstance(v, float) else f"{v:,}" if num else str(v))
+        return {"text": text, "num": num}
+    return {"columns": [str(c) for c in df.columns],
+            "rows": [[cell(v) for v in row] for row in df.head(MAX_ROWS).itertuples(index=False, name=None)],
+            "more": f"first {MAX_ROWS:,} of {len(df):,} rows" if len(df) > MAX_ROWS else ""}
 
 
 def _e(text: str) -> str:

@@ -4,17 +4,18 @@ Connectors and datasets are extensions (extensions/connectors/<name>/: connector
 agent/connectors). Each query runs on the one connector that holds its datasets, signed in as the user when the
 connector needs it. Data sources are remote and read-only: the agent never loads, uploads or writes anything.
 
-Two independent safety layers: `check_select` (one SELECT/WITH statement on documented datasets only) and a
-read-only connection (SQLite: an authorizer that denies anything but reading; servers: a read-only account and
+Two independent safety layers: `check_select` (one SELECT/WITH statement on documented datasets only, from the
+query parsed by sqlglot) and a read-only connection (SQLite: an authorizer that denies anything but reading; servers: a read-only account and
 connection). Rows are capped with fetchmany so a query can never flood the prompt.
 """
 from __future__ import annotations
 
-import re
 import sqlite3
 import time
 
 import pandas as pd
+import sqlglot
+from sqlglot import exp
 
 from . import config, connectors, credentials
 
@@ -23,61 +24,85 @@ class LakeError(Exception):
     pass
 
 
-_FORBIDDEN = re.compile(r"\b(insert|update|delete|merge|drop|alter|create|truncate|grant|revoke|exec|"
-                        r"execute|call|attach|detach|pragma|vacuum|copy|into|load|set)\b", re.I)
+# Statements and clauses a read-only query may never contain, found in the parsed query (not by keyword search, so
+# a column named "set" or "copy" is fine and a keyword inside a string or comment never counts).
+_WRITES = (exp.DML, exp.DDL, exp.Into, exp.Command, exp.Pragma, exp.Set, exp.Copy, exp.Grant, exp.Use,
+           exp.Transaction, exp.Commit, exp.Rollback, exp.Attach, exp.Detach, exp.LoadData, exp.Execute)
+_FILTERS = (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE, exp.In, exp.Between)
 
 
-def _strip(sql: str) -> str:
-    """Remove comments and string literals so keywords inside them don't count."""
-    sql = re.sub(r"/\*.*?\*/", " ", sql, flags=re.S)
-    sql = re.sub(r"--[^\n]*", " ", sql)
-    return re.sub(r"'(?:[^']|'')*'", "''", sql)
+def dialect_of(connector) -> str:
+    """The connector's SQL dialect for sqlglot (`dialect` in connector.md, e.g. trino, tsql, oracle); local data is
+    SQLite; "" is sqlglot's generic SQL."""
+    return connector.setting("dialect", "sqlite" if connector.kind in ("sqlite", "mock") else "")
+
+
+def _parse(sql: str) -> list[exp.Expression]:
+    """The statements in `sql`, read in generic SQL, else in the dialect of an enabled connector."""
+    dialects = [""] + [d for d in dict.fromkeys(dialect_of(c) for c in connectors.enabled().values()) if d]
+    for dialect in dialects:
+        try:
+            return [e for e in sqlglot.parse(sql, read=dialect or None) if e is not None]
+        except sqlglot.errors.SqlglotError:
+            continue
+    raise LakeError("The query could not be read as SQL. Write one plain SELECT statement.")
+
+
+def _tables(query: exp.Expression) -> list[str]:
+    """The tables a query reads (not its own CTEs), as written: schema.table when qualified."""
+    ctes = {c.alias_or_name.lower() for c in query.find_all(exp.CTE)}
+    names = (".".join(p for p in (t.catalog, t.db, t.name) if p) for t in query.find_all(exp.Table))
+    return [n for n in names if n and n.lower() not in ctes]
 
 
 def check_select(sql: str, datasets: list[str]) -> str:
     """Return the cleaned statement, or raise LakeError if it is not one read-only query on allowed datasets."""
-    body = _strip(sql).strip().rstrip(";").strip()
-    if ";" in body:
+    statements = _parse(sql)
+    if len(statements) != 1:
         raise LakeError("Send exactly one SQL statement.")
-    if not re.match(r"(select|with)\b", body, re.I):
+    query = statements[0]
+    if not isinstance(query, exp.Query):
         raise LakeError("Only SELECT queries (optionally starting with WITH) are allowed.")
-    bad = _FORBIDDEN.search(body)
-    if bad:
-        raise LakeError(f"Keyword not allowed in a read-only query: {bad.group(0).upper()}.")
-    ctes = {m.lower() for m in re.findall(r"(?:\bwith|,)\s*([A-Za-z_]\w*)\s+as\s*\(", body, re.I)}
+    bad = next(query.find_all(*_WRITES), None)
+    if bad is not None:
+        raise LakeError(f"Not allowed in a read-only query: {bad.key.upper()}.")
     allowed = {v.lower() for v in datasets}
-    for name in re.findall(r"\b(?:from|join)\s+([A-Za-z_][\w.]*)", body, re.I):
-        if name.lower() not in allowed | ctes:
+    for name in _tables(query):
+        if name.lower() not in allowed:
             raise LakeError(f"Unknown or not allowed dataset: {name}. Allowed: {', '.join(datasets)}.")
     return sql.strip().rstrip(";").strip()
 
 
-def limit_sql(sql: str, n: int) -> str:
+def limit_sql(sql: str, n: int, dialect: str = "") -> str:
     """Ask the server for at most n rows, so a dataset with billions of rows is never scanned in full for a preview.
-    Appends LIMIT (keeps ORDER BY); a query with its own LIMIT is wrapped. A connection kind may supply its own
-    `limit_sql` for its dialect (e.g. FETCH FIRST n ROWS ONLY)."""
-    if re.search(r"\blimit\s+\d+\s*$", _strip(sql), re.I):
-        return f"SELECT * FROM ({sql}) AS limited_q LIMIT {n}"
-    return f"{sql} LIMIT {n}"
+    Written in the connector's dialect (LIMIT, TOP or FETCH FIRST); a query with its own limit is wrapped, so the
+    cap never raises it. A connection kind may still supply its own `limit_sql`."""
+    query = _parse(sql)[0]
+    if query.args.get("limit") or query.args.get("fetch"):
+        query = exp.select("*").from_(query.subquery("limited_q"))
+    return query.limit(n).sql(dialect=dialect or None)
 
 
 def check_required_filters(sql: str, required: dict[str, list[list[str]]]) -> None:
     """Large datasets marked in their dataset file must be filtered on their key column (e.g. a date), so a query
-    cannot scan them in full. A keyword check like check_select, not a parser: the read-only account and the
-    server's own limits remain the real protection."""
-    body = _strip(sql)
-    used = {m.lower() for m in re.findall(r"\b(?:from|join)\s+([A-Za-z_][\w.]*)", body, re.I)}
+    cannot scan them in full: a comparison, IN or BETWEEN on the column in a WHERE or JOIN ... ON, or (where the
+    dataset allows it) the column in GROUP BY. The read-only account and the server's own limits remain the real
+    protection."""
+    query = _parse(sql)[0]
+    used = {n.lower() for n in _tables(query)}
+    conditions = [c for node in query.find_all(exp.Where, exp.Join)
+                  for c in ([node.this] if isinstance(node, exp.Where) else [node.args.get("on")]) if c is not None]
+    filtered = {col.name.lower() for cond in conditions for f in cond.find_all(*_FILTERS)
+                for col in f.find_all(exp.Column)}
+    grouped = {col.name.lower() for g in query.find_all(exp.Group) for col in g.find_all(exp.Column)}
     for dataset, groups in required.items():
         if dataset.lower() not in used:
             continue
-        grouped = re.search(r"\bgroup\s+by\b(.*?)(?:\border\s+by\b|\bhaving\b|\blimit\b|\)|$)", body, re.I | re.S)
         for options in groups:                       # each group: any one of these columns must be filtered
             cols = [c for c in options if c != "GROUP BY"]
-            if any(re.search(rf"\b(?:where|and|on)\b[^;]*?\b{re.escape(c)}\b\s*(?:=|<|>|\bin\b|\bbetween\b)",
-                             body, re.I | re.S) for c in cols):
+            if any(c.lower() in filtered for c in cols):
                 continue
-            if "GROUP BY" in options and grouped and any(re.search(rf"\b{re.escape(c)}\b", grouped.group(1), re.I)
-                                                         for c in cols):
+            if "GROUP BY" in options and any(c.lower() in grouped for c in cols):
                 continue                             # split by it: the values are never added together
             how = " (or GROUP BY it)" if "GROUP BY" in options else ""
             raise LakeError(f"{dataset} needs a filter on {' or '.join(cols)}{how} "
@@ -104,7 +129,8 @@ class Lake:
         self.name = f"{connector.name} ({connector.kind})"
         source = getattr(self.module, "source", lambda c: c.name)(connector)
         self.source = f"{source}#{login.user if login else ''}"     # each user's own catalogue view
-        self._limit = getattr(self.module, "limit_sql", limit_sql)
+        dialect = dialect_of(connector)
+        self._limit = getattr(self.module, "limit_sql", lambda sql, n: limit_sql(sql, n, dialect))
 
     def _login(self):
         if self.connector.needs_login and self.login is None:
@@ -252,8 +278,7 @@ def connector_for(sql: str) -> str:
     """The one connector that holds the datasets a query reads. Datasets of two connectors cannot be joined in
     one query: query each, then combine the saved extracts with run_python."""
     owners = connectors.datasets()
-    used = {owners[n].connector for n in (m.group(1) for m in re.finditer(r"\b(?:from|join)\s+([A-Za-z_][\w.]*)",
-                                                                        _strip(sql), re.I)) if n in owners}
+    used = {owners[n].connector for n in _tables(_parse(sql)[0]) if n in owners}
     if len(used) > 1:
         raise LakeError(f"This query reads datasets of several connectors ({', '.join(sorted(used))}). Query each "
                         "one separately, then combine the saved extracts with run_python.")

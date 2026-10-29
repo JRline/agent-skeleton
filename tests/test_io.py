@@ -155,7 +155,7 @@ class FileCache(TempDirs):
             self.assertEqual(parse.call_count, 1)
             tablecache.clear_memory()                                               # e.g. a new app process
             dispatch("read_file", {"path": "inputs/big.csv"}, ctx, "read_file-9")
-            self.assertEqual(parse.call_count, 1)                                   # the pickle is reused
+            self.assertEqual(parse.call_count, 1)                                   # the Parquet copy is reused
             self.csv(rows=301)                                                      # the file changed
             dispatch("read_file", {"path": "inputs/big.csv"}, ctx, "read_file-10")
             self.assertEqual(parse.call_count, 2)
@@ -169,7 +169,7 @@ class FileCache(TempDirs):
         self.assertIn(f"first {config.READ_FILE_STORED_ROWS} of 500 rows", stored)
         self.assertLess(stored.count("\n"), config.READ_FILE_STORED_ROWS + 5)
 
-    def test_analysis_code_gets_pickles_instead_of_parsing(self):
+    def test_analysis_code_gets_cached_copies_instead_of_parsing(self):
         self.excel()
         code = "import pandas as pd\nresult = len(pd.read_excel('inputs/big.xlsx', header=None)) + len(tables['t'])"
         with mock.patch.object(tablecache, "read", side_effect=tablecache.read) as parse:
@@ -178,6 +178,19 @@ class FileCache(TempDirs):
         self.assertEqual(out["result"]["value"], 301 + 300)                         # header=None keeps row 0
         self.assertEqual(again["result"]["value"], 601)
         self.assertEqual(parse.call_count, 2)            # once per distinct read (default, header=None), not per run
+
+    def test_a_table_parquet_cannot_hold_is_still_read_correctly(self):
+        """A number column with a text "Total" row cannot be stored as Parquet: no disk copy, same result."""
+        import pandas as pd
+        path = config.inputs_dir() / "mixed.xlsx"
+        pd.DataFrame({"amount": [1, 2, "Total"]}).to_excel(path, index=False)    # Excel keeps ints and text apart
+        self.assertIsNone(tablecache.cached_file(path))
+        with mock.patch.object(tablecache, "read", side_effect=tablecache.read) as parse:
+            out = run_code("result = len(tables['t'])", {"t": "inputs/mixed.xlsx"}, run_id="r1", save_as="x")
+            again = run_code("result = len(tables['t'])", {"t": "inputs/mixed.xlsx"}, run_id="r1", save_as="x")
+        self.assertEqual((out["result"]["value"], again["result"]["value"]), (3, 3))
+        self.assertEqual(parse.call_count, 0)                        # tried once above, not parsed again to fail
+        self.assertEqual(list(tablecache.cache_dir().glob("*")), [])  # no copy, no half-written file
 
     def test_work_tables_are_cached_when_written(self):
         ctx = ToolContext(run_id="r1", run_dir=config.RUNS_DIR / "r1")
@@ -295,11 +308,12 @@ class SqlFormat(TempDirs):
         sql = ("SELECT a, SUM(amount) AS s FROM usage_limits WHERE partition_key='FY2025' AND version IN ('CLOSED','EARLY') "
                "AND as_of_date BETWEEN '2025-04-01' AND '2025-06-30' AND entity = 'A, B' GROUP BY a ORDER BY s DESC")
         out = format_sql(sql)
-        self.assertEqual(out.splitlines()[:4], ["SELECT", "    a,", "    SUM(amount) AS s", "FROM usage_limits"])
-        self.assertIn("    AND as_of_date BETWEEN '2025-04-01' AND '2025-06-30'", out)
+        self.assertEqual(out.splitlines()[:4], ["SELECT", "  a,", "  SUM(amount) AS s", "FROM usage_limits"])
+        self.assertIn("  AND as_of_date BETWEEN '2025-04-01' AND '2025-06-30'", out)
         self.assertIn("'A, B'", out)                                             # strings untouched
         squash = lambda s: "".join(s.split()).replace(",", "").lower()           # noqa: E731
         self.assertEqual(squash(out), squash(sql))
+        self.assertEqual(format_sql("SELECT ((("), "SELECT (((")            # unreadable SQL is shown as written
 
 
 class RequestReviewContext(TempDirs):

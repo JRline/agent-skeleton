@@ -1,0 +1,61 @@
+{#- One conversation as a self-contained page (agent/export.py prepares the data; values are escaped automatically). -#}
+{%- macro table(t) -%}
+<div class='table-wrap'><table><tr>{% for c in t.columns %}<th>{{ c }}</th>{% endfor %}</tr>
+{%- for row in t.rows %}<tr>{% for cell in row %}<td{% if cell.num %} class='num'{% endif %}>{{ cell.text }}</td>{% endfor %}</tr>{% endfor -%}
+</table></div>{% if t.more %}<div class='caption'>{{ t.more }}</div>{% endif %}
+{%- endmacro -%}
+{%- macro output(o) -%}
+{% if o.table %}<div class='caption'>{{ o.caption }}</div>{{ table(o.table) }}{% if o.rest %}<div class='caption'>{{ o.rest }}</div>{% endif %}
+{%- else %}<pre>{{ o.text }}</pre>{% endif %}
+{%- endmacro -%}
+{%- macro code(text) -%}{% if text %}<pre><code>{{ text }}</code></pre>{% endif %}{%- endmacro -%}
+<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>{{ title }}</title><style>
+:root { --bg:#fbfbfa; --fg:#1d2321; --muted:#5f6b68; --rule:#d9dfdd; --req:#fdecec; --req-edge:#d64545;
+  --ans:#eaf6ec; --ans-edge:#2e8b47; --code:#f1f3f2; }
+@media (prefers-color-scheme: dark) { :root { --bg:#141817; --fg:#e4ebe9; --muted:#9aaaa6; --rule:#2c3634;
+  --req:#3a2020; --req-edge:#e06565; --ans:#1b2f22; --ans-edge:#56b971; --code:#1d2523; } }
+body { background:var(--bg); color:var(--fg); font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;
+  margin:0; padding:24px max(16px, 4vw); }
+main { max-width:900px; margin:0 auto; }
+h1 { font-size:26px; margin:0 0 4px; } .meta { color:var(--muted); font-size:13px; margin-bottom:24px; }
+.req, .ans { border-radius:8px; padding:12px 16px; margin:18px 0 8px; }
+.req { background:var(--req); border-left:4px solid var(--req-edge); }
+.ans { background:var(--ans); border:1px solid var(--ans-edge); }
+.label { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
+details { border:1px solid var(--rule); border-radius:8px; padding:8px 12px; margin:8px 0; }
+summary { cursor:pointer; color:var(--muted); }
+.step { border-top:1px solid var(--rule); padding:8px 0; } .step:first-of-type { border-top:none; }
+pre { background:var(--code); padding:10px 12px; border-radius:6px; overflow-x:auto; font-size:13px; }
+code { font-family:ui-monospace,Menlo,Consolas,monospace; }
+.table-wrap { overflow-x:auto; margin:8px 0; }
+table { border-collapse:collapse; font-size:13px; } th, td { border:1px solid var(--rule); padding:4px 8px; text-align:left; }
+td.num { text-align:right; font-variant-numeric:tabular-nums; } .caption { color:var(--muted); font-size:12px; }
+.files { color:var(--muted); font-size:13px; } sup a { text-decoration:none; }
+</style></head><body><main>
+<h1>{{ title }}</h1><div class='meta'>Conversation {{ run_id }} · exported {{ exported }} · model(s) {{ models }}</div>
+{%- for seg in segments %}
+<div class='req'><div class='label'>Your request</div><div>{{ seg.goal }}</div>
+{%- if seg.files %}<div class='files'>{% for f in seg.files %}📎 {{ f }} {% endfor %}</div>{% endif %}</div>
+{%- if seg.steps %}
+<details><summary>How I got here · {{ seg.steps | length }} steps</summary>
+{%- for s in seg.steps %}<div class='step'>
+{%- if s.kind == "plan" %}<b>Plan</b><ol>{% for item in s.plan %}<li>{{ item }}</li>{% endfor %}</ol>
+{%- elif s.kind == "approval" %}<b>Asked to approve</b> <code>{{ s.tool }}</code>{% if s.explain %}<div>{{ s.explain }}</div>{% endif %}{{ code(s.code) }}
+{%- elif s.kind == "ran" %}<b>{{ s.head }}</b> <code>{{ s.tool }}</code>{{ code(s.code) }}{% if s.output %}{{ output(s.output) }}{% endif %}
+{%- elif s.kind == "answered" %}<b>Question</b> {{ s.question }}<br><b>Answer</b> {{ s.answer }}
+{%- elif s.kind == "issues" %}<b>{{ s.label }}</b><ul>{% for i in s.issues %}<li>{{ i }}</li>{% endfor %}</ul>
+{%- elif s.kind == "asked" %}<b>Question to you</b> {{ s.question }}
+{%- endif %}</div>{% endfor %}
+</details>
+{%- endif %}
+{%- for a in seg.answers %}
+<div class='ans'><div class='label'>Answer</div>{% if a.when %}<div class='caption'>{{ a.when }}</div>{% endif %}{{ a.body }}
+{%- for t in a.tables %}<div class='caption'><b>{{ t.title }}</b></div>{{ table(t.table) }}{% endfor %}</div>
+{%- if a.sources %}<details><summary>Sources</summary><ol>
+{%- for src in a.sources %}<li id='{{ src.id }}'><code>{{ src.name }}</code>
+{%- if src.found %}{{ code(src.code) }}{{ output(src.output) }}{% else %} (document or earlier source){% endif %}</li>{% endfor %}
+</ol></details>{% endif %}
+{%- endfor %}
+{%- endfor %}
+</main></body></html>

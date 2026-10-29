@@ -86,13 +86,13 @@ How a session works, the tools and skills, the data lake and attachments, and th
   documentation (`list_datasets`, `describe_dataset`: catalogue and dataset files, no data rows) do not ask.
   SQL extracts and aggregates; Python analyses the small extracts.
 - **IO cost** (datasets can hold billions of rows, input files 50k+):
-  - every query asks the server for at most `MAX_SQL_ROWS` + 1 rows (`LIMIT`, or the connection kind's
-    `limit_sql`); a result over the cap is refused with advice to filter and aggregate in SQL, never truncated
+  - every query asks the server for at most `MAX_SQL_ROWS` + 1 rows (`LIMIT`, `TOP` or `FETCH FIRST`,
+    in the connector's `dialect`); a result over the cap is refused with advice to filter and aggregate in SQL, never truncated
     (an export, `export_query`, has its own cap, `EXPORT_MAX_ROWS`, and streams to a file);
   - datasets, columns and partitions are fetched once per `LAKE_META_TTL_S`; the same SQL in a conversation reuses its
     saved table (`refresh: true` forces a new query);
   - large datasets set `required_filters` in their file; unfiltered queries are refused;
-  - each file version is parsed once (`agent/tablecache.py`: memory + pickles in `sandbox/work/.cache/`);
+  - each file version is parsed once (`agent/tablecache.py`: memory + Parquet copies in `sandbox/work/.cache/`);
     `read_file`, `tables`, `read_table` and literal `pd.read_*` calls in analysis code reuse it;
   - `read_file` stores `READ_FILE_STORED_ROWS` rows under its ref, not a copy of the file; the citation check
     indexes each stored output once; the UI reads tables once per version and shows `UI_MAX_GRID_ROWS` rows.

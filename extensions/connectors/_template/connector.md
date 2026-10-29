@@ -4,6 +4,7 @@ kind: odbc
 description: One line: what this data source is (e.g. the production data lake, read-only).
 needs_login: yes
 connection_env: LAKE_ODBC
+dialect: trino   # the server's SQL dialect as sqlglot names it (trino, tsql, oracle, postgres, ...)
 ---
 Notes every dataset of this connector shares (calendars, units, how dates work). Folders starting with "_" are not
 loaded: copy this folder to extensions/connectors/<name>/, then:

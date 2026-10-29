@@ -108,8 +108,8 @@ def run_code(code: str, tables: dict[str, str], run_id: str, save_as: str) -> di
         files = {name: _sandbox_file(path) for name, path in tables.items()}
     except Exception as e:
         return {"ok": False, "error": str(e)}
-    from . import tablecache                 # parsed once per file version; the subprocess loads pickles
-    files = {name: str(tablecache.pickle_for(full) or full) for name, full in files.items()}
+    from . import tablecache                 # parsed once per file version; the subprocess loads Parquet copies
+    files = {name: str(tablecache.cached_file(full) or full) for name, full in files.items()}
     job = {"code": code, "tables": files, "cache": _precache_reads(code), "root": str(config.SANDBOX_DIR.resolve()),
            "lake": str(config.connectors_dir().resolve()), "max_rows": config.PY_MAX_ROWS,
            "allowed_modules": sorted(ALLOWED_MODULES), "banned_submodules": sorted(_BANNED_SUBMODULES),
@@ -158,9 +158,9 @@ def _precache_reads(code: str) -> dict[str, str]:
         except Exception:
             continue
         kwargs = {} if name == "read_table" else kwargs
-        pkl = tablecache.pickle_for(full, kwargs)
-        if pkl:
-            out[f"{full}|{tablecache.kwargs_key(kwargs)}"] = str(pkl)
+        cached = tablecache.cached_file(full, kwargs)
+        if cached:
+            out[f"{full}|{tablecache.kwargs_key(kwargs)}"] = str(cached)
     return out
 
 

@@ -163,6 +163,9 @@ from the connector's optional `sample.py` (git-ignored `data/`, never inside `sa
   backend). Only `rwa_limit_status_now` fails (step cap 8; it ran 4 queries for a one-query skill). A golden task's
   `max_steps` stays an exact cap in the eval (no plan scaling).
   Users can set a conversation's step limit (sidebar "Step limit per instruction", CLI `--max-steps`; 0 = automatic).
+- Libraries over custom code (2026-10-29): sqlglot parses SQL (guard, tables, required filters, row limits in the
+  connector's `dialect`, formatting); Parquet table cache (no pickles); Jinja2 page template for the HTML export;
+  tenacity retries. All four are pinned in requirements.txt.
 
 ## Next tasks, in order
 1. Pin `requirements.txt` to production's exact Python and package versions (ask the owner). The grid number
@@ -196,7 +199,7 @@ from the connector's optional `sample.py` (git-ignored `data/`, never inside `sa
 - `pysandbox` has no OS-level network or memory isolation (imports and readers are restricted instead, and a
   CPU/time limit applies). Review with security before production.
 - `recall` and `search_docs` are keyword-only (no embeddings).
-- `datalake.check_select` is a keyword/regex guard, not a SQL parser. In production the read-only lake
+- `datalake.check_select` parses the query with sqlglot (one read-only query on documented datasets). In production the read-only lake
   account and the dataset files (the allowlist) are the real protection; the guard is a second layer.
 - The `claude` backend (Claude Code CLI) is for development only: prompts go to Anthropic, so synthetic data only.
   Each call starts a CLI process (a few seconds of overhead).

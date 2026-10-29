@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import importlib
 import inspect
-import time
 from typing import Literal
+
+from tenacity import Retrying, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
 from . import config
 
@@ -91,17 +92,9 @@ class ModuleChatModel(ChatModel):
             self.last_send["effort"] = kwargs["effort"]
         else:
             payload = messages if self.pass_messages else render(messages)
-        for attempt in range(self.retries):
-            try:
-                out = self.module.call(payload, **kwargs)
-                return apply_stop(out, stop)
-            except CallCancelled:
-                raise
-            except Exception:
-                if attempt == self.retries - 1:
-                    raise
-                time.sleep(self.backoff ** attempt)
-        raise RuntimeError("unreachable")
+        call = Retrying(stop=stop_after_attempt(self.retries), wait=wait_exponential(multiplier=1, exp_base=self.backoff),
+                        retry=retry_if_not_exception_type(CallCancelled), reraise=True)
+        return apply_stop(call(self.module.call, payload, **kwargs), stop)
 
     def new_session(self):
         """Forget what each channel holds, and let a backend with memory start fresh instances."""

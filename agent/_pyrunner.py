@@ -33,8 +33,8 @@ READERS = {"read_csv": pd.read_csv, "read_excel": pd.read_excel, "read_json": pd
 
 def load(path: Path):
     suffix = path.suffix.lower()
-    if suffix == ".pkl":                      # parsed once by the agent (agent/tablecache.py)
-        return pd.read_pickle(path)
+    if suffix == ".parquet":                  # parsed once by the agent (agent/tablecache.py)
+        return pd.read_parquet(path)
     if suffix == ".csv":
         return READERS["read_csv"](path)
     if suffix in (".xlsx", ".xlsm", ".xls"):
@@ -102,11 +102,11 @@ def main():
                                     "sandbox: 'inputs/<file name>' or 'work/<run>/<table>.csv'.")
         return full
 
-    cache = job.get("cache", {})                            # pickles of reads the agent saw in the code
+    cache = job.get("cache", {})                            # Parquet copies of reads the agent saw in the code
 
     def cached(full, kwargs):
-        pkl = cache.get(f"{full}|{json.dumps(kwargs, sort_keys=True, default=str)}")
-        return pd.read_pickle(pkl) if pkl else None
+        copy = cache.get(f"{full}|{json.dumps(kwargs, sort_keys=True, default=str)}")
+        return pd.read_parquet(copy) if copy else None
 
     def read_table(path):
         """Read-only loader for CSV/XLSX/JSON inside the sandbox (never the lake's storage)."""

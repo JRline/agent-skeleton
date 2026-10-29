@@ -1,7 +1,9 @@
 """Connection kind `odbc`: a database or data lake server over ODBC (pyodbc), signed in as the user.
 
 Settings in connector.md: `connection_env`, the name of the environment variable that holds the connection string
-without the sign-in (driver, server, port, database; default LAKE_ODBC), and `needs_login: yes`. The user's ID and
+without the sign-in (driver, server, port, database; default LAKE_ODBC), `needs_login: yes`, and `dialect`, the
+server's SQL dialect as sqlglot names it (e.g. trino, tsql, oracle, postgres; default generic SQL): queries are read
+and row limits written in it. The user's ID and
 password come from their sign-in (agent/credentials.py, memory only) and are added as UID and PWD; never put them in
 the connection string, code, the repository, environment files or logs. The datasets the agent may query are the
 dataset files in the connector's folder.
@@ -46,9 +48,3 @@ def connect(connector, login=None):
 def list_datasets(connector, login=None) -> list[str]:
     """The documented datasets: an explicit list agreed with the data owner, never the whole catalogue."""
     return list(connector.datasets)
-
-
-def limit_sql(sql: str, n: int) -> str:
-    """How the server's SQL dialect asks for at most n rows. Check which form your server accepts (e.g. `... LIMIT n`
-    or `FETCH FIRST n ROWS ONLY`)."""
-    return f"{sql} LIMIT {n}"
