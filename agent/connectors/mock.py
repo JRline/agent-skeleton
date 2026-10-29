@@ -1,7 +1,7 @@
 """Connection kind `mock`: the mock lake server (scripts/mock_lake_server.py), a separate read-only process over HTTP.
 
-Closer to a real server than `sqlite`: network, per-user sign-in, latency. Settings: URL (default MOCK_LAKE_URL or
-http://127.0.0.1:8765). With NEEDS_LOGIN = True each user's ID and password go as HTTP basic auth (the server is
+Closer to a real server than `sqlite`: network, per-user sign-in, latency. Setting: URL, where the server serves this
+connector's data (each connector its own, so several can be reached at once). With NEEDS_LOGIN = True each user's ID and password go as HTTP basic auth (the server is
 started with MOCK_LAKE_USERS); otherwise an optional MOCK_LAKE_TOKEN. Standard library only.
 """
 from __future__ import annotations
@@ -15,9 +15,11 @@ import urllib.request
 from .. import config
 
 
-def _url(connector=None) -> str:
-    default = os.getenv("MOCK_LAKE_URL", "http://127.0.0.1:8765")
-    return (connector.setting("url", default) if connector is not None else default).rstrip("/")
+def _url(connector) -> str:
+    url = connector.setting("url").rstrip("/")
+    if not url:
+        raise RuntimeError(f"Connector {connector.name} has no URL in its connector.py.")
+    return url
 
 
 def source(connector) -> str:

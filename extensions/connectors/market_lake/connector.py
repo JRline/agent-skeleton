@@ -6,6 +6,7 @@ DESCRIPTION = ("Synthetic DemoBank market risk system (VaR, stressed VaR, expect
                "a separate server from sample_lake. Illustrative only.")
 NEEDS_LOGIN = False
 DATA = "data"
+URL = "http://127.0.0.1:8766"     # where scripts/mock_lake_server.py serves DATA (KIND = "mock", replay scripts)
 CONNECTION_STRING = "DRIVER={Market ODBC Driver};SERVER=market.example.internal;PORT=5433;DATABASE=market_risk"
 
 ABOUT = """

@@ -132,7 +132,6 @@ Useful files in `runs/<run id>/`: `log.jsonl` (every model and tool call, with p
 | `MODEL_MEMORY` | `session` if the wrapper has `channel` | Send fixed prompt parts once per instance (docs/design.md §4a); `off` sends everything each call |
 | `MEMORY_REFRESH_TOKENS` | `20000` | Session mode: re-send everything after this much text (lower it if answers drift after compression) |
 | `CONNECTORS` | e.g. `lake_odbc` | The connectors to enable (default: every folder in `extensions/connectors/`; leave out `sample_lake` in production) |
-| `CONNECTOR_<NAME>_CONNECTION_STRING` | your driver, server, port, database | Overrides an `odbc` connector's `CONNECTION_STRING` (never with UID/PWD: those come from each user's sign-in) |
 | `AGENT_HOME` | project folder | Where `runs/`, `sandbox/` and `settings/` live |
 | `AGENT_EXTENSIONS` (`AGENT_SKILLS`, `AGENT_TOOLKITS`, `AGENT_EXAMPLES`) | default `extensions/...` | Point to another folder of extensions (or one type) |
 | `BASIC_TOOLKITS` | e.g. `files,analysis,datalake,docs` | Toolkits on when a session starts |

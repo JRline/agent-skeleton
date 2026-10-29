@@ -3,7 +3,6 @@ credit_exposures (same connector, sample_lake) and desk_risk (another connector,
 import os
 import subprocess
 import sys
-import threading
 
 import pandas as pd
 
@@ -11,7 +10,6 @@ from agent import config, connectors, datalake, replay
 from agent.backends.fake import FakeModel
 from agent.loop import run
 from agent.tools import ToolContext, dispatch
-from scripts import mock_lake_server as server
 
 from tests.helpers import OK, PLAN, STD, TempDirs, j
 
@@ -113,13 +111,10 @@ class JoinConversations(TempDirs):
         return replay.agent_result(state, ref)
 
     def replay(self, state):
-        env = {**os.environ, "ANALYSIS_LAKE": "mock", "ANALYSIS_INPUTS": str(config.inputs_dir())}
-        for name, conn in connectors.enabled().items():
-            srv = server.serve(0, conn.path("data"), quiet=True)
-            threading.Thread(target=srv.serve_forever, daemon=True).start()
-            self.addCleanup(srv.server_close)
-            self.addCleanup(srv.shutdown)
-            env[f"ANALYSIS_{name.upper()}_URL"] = f"http://127.0.0.1:{srv.server_address[1]}"
+        """Each connector's own mock server at its own URL, all at once, as the script's SOURCES name them."""
+        for name in connectors.enabled():
+            self.serve_mock(name)
+        env = {**os.environ, "ANALYSIS_INPUTS": str(config.inputs_dir())}
         return subprocess.run([sys.executable, str(replay.export(state))], capture_output=True, text=True, env=env,
                               timeout=60)
 

@@ -36,8 +36,11 @@ ABOUT = """Notes every dataset of this connector shares (calendar, units, how da
   `partitions(connector, dataset, column, login)`, `limit_sql(sql, n)`, `source(connector)`. Read-only, always.
 - Sign-in: with `NEEDS_LOGIN = True` the sidebar shows **Data sign-in: <name>** (CLI `--sign-in name=user`). The
   login is held in memory only, per conversation and connector, never written anywhere, masked in errors.
-- Settings: `CONNECTORS=a,b` picks the enabled connectors (default all); `CONNECTOR_<NAME>_<KEY>` overrides any
-  constant (e.g. `CONNECTOR_SAMPLE_LAKE_KIND=mock`). Never put a user ID, password or token in a file.
+- Settings: `CONNECTORS=a,b` picks the enabled connectors (default all). A connection (connection string, URL)
+  is set only in its `connector.py`, never in an environment variable: each connector has its own, so the agent
+  connects to several sources at once. Never put a user ID, password or token in a file.
+- "Data source name not found" (ODBC IM002, a missing DSN): the `DRIVER={...}` name in `CONNECTION_STRING` is not
+  installed under that exact name. The error lists the installed drivers; copy the name exactly.
 - Optional `sample.py` with `write()` builds synthetic data for local runs (`scripts/setup_local.py` calls it), and
   optional `inputs()` returns sample input files that go with it (e.g. a mapping table); data folders are git-ignored.
 - Sample connectors, datasets and their data are extensions only: the core (`agent/`, `app.py`, `cli.py`, `scripts/`,

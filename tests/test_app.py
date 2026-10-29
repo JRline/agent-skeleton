@@ -341,17 +341,12 @@ class LakeSignIn(TempDirs):
 
     def setUp(self):
         super().setUp()
-        import threading
-        from scripts import mock_lake_server as server
-        srv = server.serve(0, (config.connectors_dir() / "sample_lake" / "data"), quiet=True, users={"analyst": "s3cret-Pa55"})
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        self.addCleanup(srv.server_close)
-        self.addCleanup(srv.shutdown)
-        for patch in (mock.patch.dict("os.environ", {"LLM_BACKEND": "fake", "CONNECTOR_SAMPLE_LAKE_NEEDS_LOGIN": "yes",
-                                                     "MOCK_LAKE_URL": f"http://127.0.0.1:{srv.server_address[1]}"}),
-                      mock.patch.dict("os.environ", {"CONNECTOR_SAMPLE_LAKE_KIND": "mock"})):
-            patch.start()
-            self.addCleanup(patch.stop)
+        from agent import connectors
+        self.serve_mock(use=True, users={"analyst": "s3cret-Pa55"})
+        connectors.OVERRIDES["sample_lake"]["needs_login"] = True
+        patch = mock.patch.dict("os.environ", {"LLM_BACKEND": "fake"})
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def sign_in(self, at, password):
         at.text_input(key="user_sample_lake").set_value("analyst")

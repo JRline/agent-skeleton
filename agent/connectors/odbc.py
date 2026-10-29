@@ -11,6 +11,8 @@ Needs pyodbc and the server's ODBC driver in the closed environment (check they 
 """
 from __future__ import annotations
 
+import re
+
 from .. import config
 
 
@@ -28,6 +30,23 @@ def connection_string(connector, login) -> str:
     return f"{base};UID={_value(login.user)};PWD={_value(login.password)}"
 
 
+def driver_help(connector, installed: list[str]) -> str:
+    """Why ODBC found no data source (IM002), in words: the driver the connection string names is not installed
+    under that exact name, or the string names neither a DRIVER nor a DSN. Uses only CONNECTION_STRING (no sign-in)."""
+    text = connector.setting("connection_string")
+    m = re.search(r"(?i)\bDRIVER\s*=\s*(\{[^}]*\}|[^;]*)", text)
+    have = ", ".join(installed) or "none"
+    if m:
+        name = m.group(1).strip("{} ")
+        return (f"Connector {connector.name}: ODBC driver '{name}' (DRIVER= in its connector.py) is not installed "
+                f"under that name. Installed drivers: {have}. Copy the exact name into CONNECTION_STRING.")
+    if not re.search(r"(?i)\bDSN\s*=", text):
+        return (f"Connector {connector.name}: its CONNECTION_STRING names neither DRIVER={{...}} nor DSN=..., so ODBC "
+                f"has nothing to connect with. Installed drivers: {have}.")
+    return (f"Connector {connector.name}: the DSN in its CONNECTION_STRING is not defined on this machine (odbc.ini / "
+            f"ODBC Data Sources). Installed drivers: {have}.")
+
+
 def source(connector) -> str:
     return f"odbc:{connector.name}"
 
@@ -37,7 +56,12 @@ def connect(connector, login=None):
     (15 minutes by default), so the driver does not cut long queries off first. A driver error that echoes the
     connection string has the password masked before anyone sees it (credentials.scrub)."""
     import pyodbc
-    conn = pyodbc.connect(connection_string(connector, login), readonly=True, autocommit=True, timeout=30)
+    try:
+        conn = pyodbc.connect(connection_string(connector, login), readonly=True, autocommit=True, timeout=30)
+    except pyodbc.Error as e:
+        if "IM002" in str(e):                 # "Data source name not found and no default driver specified"
+            raise RuntimeError(driver_help(connector, pyodbc.drivers())) from None
+        raise
     conn.timeout = config.SQL_TIMEOUT_S
     return conn
 

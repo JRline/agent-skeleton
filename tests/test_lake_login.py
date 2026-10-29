@@ -1,14 +1,11 @@
 """Data lake sign-in: the user's ID and password reach the lake and nothing else (memory only)."""
-import threading
-from unittest import mock
 
-from agent import config, credentials
+from agent import config, connectors, credentials
 from agent.backends.fake import FakeModel
 from agent.datalake import LakeError, get_lake, needs_login
 from agent.loop import resolve_pending, run_one_step
 from agent.memory import new_state
 from agent.tools import ToolContext, dispatch
-from scripts import mock_lake_server as server
 
 from tests.helpers import OK, STD, TempDirs, final, first_step, tool_call
 
@@ -19,15 +16,8 @@ SQL = f"SELECT COUNT(*) AS n FROM usage_limits WHERE {STD} AND scenario = 'ALLOC
 class LakeLogin(TempDirs):
     def setUp(self):
         super().setUp()
-        srv = server.serve(0, (config.connectors_dir() / "sample_lake" / "data"), quiet=True, users={"analyst": SECRET})
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        self.addCleanup(srv.server_close)
-        self.addCleanup(srv.shutdown)
-        for patch in (mock.patch.dict("os.environ", {"MOCK_LAKE_URL": f"http://127.0.0.1:{srv.server_address[1]}",
-                                                     "CONNECTOR_SAMPLE_LAKE_NEEDS_LOGIN": "yes"}),
-                      mock.patch.dict("os.environ", {"CONNECTOR_SAMPLE_LAKE_KIND": "mock"})):
-            patch.start()
-            self.addCleanup(patch.stop)
+        self.serve_mock(use=True, users={"analyst": SECRET})
+        connectors.OVERRIDES["sample_lake"]["needs_login"] = True
         self.addCleanup(credentials.forget, "r1", "r2", credentials.DEFAULT)
 
     def test_the_users_own_login_reaches_the_lake(self):
@@ -87,6 +77,16 @@ class OdbcTemplate(TempDirs):
         conn = Connector(name="lake", kind="odbc", folder=config.EXTENSIONS_DIR)
         with self.assertRaisesRegex(RuntimeError, "no CONNECTION_STRING"):
             odbc.connection_string(conn, None)
+
+    def test_a_missing_dsn_names_the_driver_and_what_is_installed(self):
+        from agent.connectors import Connector, odbc
+        conn = Connector(name="lake", kind="odbc", folder=config.EXTENSIONS_DIR,
+                         settings={"connection_string": "Driver={Lake ODBC 2.1};Server=s;Database=d"})
+        text = odbc.driver_help(conn, ["Lake ODBC Driver 2.1", "SQLite3"])
+        self.assertIn("'Lake ODBC 2.1'", text)
+        self.assertIn("Installed drivers: Lake ODBC Driver 2.1, SQLite3", text)
+        conn.settings["connection_string"] = "SERVER=s;DATABASE=d"
+        self.assertIn("neither DRIVER", odbc.driver_help(conn, []))
 
     def test_a_custom_connector_is_its_own_connection_code(self):
         from pathlib import Path

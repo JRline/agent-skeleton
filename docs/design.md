@@ -340,14 +340,18 @@ guidance and the planner prompt say so, after a run offered a dataset skill for 
   `description`, `partition_column`, `required_filters`, `default_filters`, then its documentation
   (`docs/dataset_entry.md`). **Only described datasets can be queried**: the files are the allowlist (intersected
   with what the server lists). Dataset names are unique across the enabled connectors.
-- `CONNECTORS` picks the enabled connectors (default all); `CONNECTOR_<NAME>_<KEY>` overrides a constant
-  (e.g. `CONNECTOR_SAMPLE_LAKE_KIND=mock`). A connector that fails to load is reported in `connectors.ERRORS`.
+- `CONNECTORS` picks the enabled connectors (default all). A connection (connection string, URL) is set only in
+  its `connector.py`, never in an environment variable, so one process connects to several sources at once (tests set
+  a mock server's port in code, `connectors.OVERRIDES`). A connector that fails to load is reported in
+  `connectors.ERRORS`. An ODBC "data source name not found" (IM002) is explained: the driver named and the drivers
+  installed (`odbc.driver_help`).
 - **One connector per query:** `datalake.connector_for(sql)` finds the connector of the datasets a query reads; a
   query that mixes connectors is refused with advice to query each and combine the extracts with `run_python`.
 - **Development:** the `sample_lake` connector holds the synthetic data (`sample.py` builds `data/*.csv`, git-ignored;
   `scripts/setup_local.py` and the tests call it). `kind: sqlite` by default (tests, quick runs);
-  `CONNECTOR_SAMPLE_LAKE_KIND=mock` reaches the same data through the **mock lake server**
-  (`scripts/mock_lake_server.py`, standard library): a separate process on localhost over HTTP (`GET /datasets`,
+  `KIND = "mock"` reaches the same data through the **mock lake server** (`scripts/mock_lake_server.py`, standard
+  library; one server per connector with local data, each at the port of its own `URL`): a separate process on
+  localhost over HTTP (`GET /datasets`,
   `POST /query`), read-only (SQLite authorizer) whatever the client sends, with optional per-user sign-in
   (`MOCK_LAKE_USERS`), token (`MOCK_LAKE_TOKEN`) and latency (`MOCK_LAKE_LATENCY_MS`); when it is down, tools return
   "Data lake server not reachable … Start it with: python scripts/mock_lake_server.py".
@@ -801,10 +805,8 @@ assembled by the harness from what ran, never by the model. Plain Python with `#
 cell by cell in VS Code / Spyder / Jupyter). The analysis comes first as plain code; support code comes after:
 - Setup: `SOURCES`, one entry per connector the queries used (each query is sent back to the connector that holds
   its datasets: `run_sql(SQL, "sample_lake")`). Kind `odbc` (`odbc`: the connector's connection string without the sign-in;
-  user ID in `ANALYSIS_USER`) or `mock` (the mock lake
-  server at the source's `url`, else `MOCK_LAKE_URL`). Any setting can be overridden with
-  `ANALYSIS_<SOURCE>_<SETTING>` (e.g. `ANALYSIS_SAMPLE_LAKE_URL`); `ANALYSIS_LAKE=mock` sends every query to the
-  mock server. The password is asked once per source and never stored. A result the server cut at its own row
+  user ID in `ANALYSIS_USER`) or `mock` (the mock lake server at the source's `url`). Each source's settings come
+  from its connector and are changed in the file, not by environment variables. The password is asked once per source and never stored. A result the server cut at its own row
   limit is an error, not a short table. Inputs from `ANALYSIS_INPUTS`; steps run in a scratch folder with their
   original paths.
 - Every read of the user's files, every successful `sql_query` and `export_query` (the export is written where the

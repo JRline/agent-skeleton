@@ -358,7 +358,7 @@ def _sources(items: list[dict]) -> dict[str, dict]:
         conn = enabled.get(name)
         kind = conn.kind if conn else "odbc"
         out[name] = {"kind": "mock" if kind in ("mock", "sqlite") else "odbc",   # local CSVs are served by the mock server
-                     "url": conn.setting("url") if conn and kind == "mock" else "",
+                     "url": conn.setting("url") if conn and kind in ("mock", "sqlite") else "",
                      "odbc": conn.setting("connection_string") if conn and kind == "odbc" else "",
                      "login": bool(conn and conn.needs_login)}
     return out
@@ -445,32 +445,22 @@ import pandas as pd
 # The data sources the queries ran on (one per connector); each query names its own: run_sql(SQL, "<source>").
 #   kind "odbc": the server over ODBC; odbc is its connection string without the sign-in (driver, server, database),
 #                as in the connector's connector.py.
-#   kind "mock": the local mock lake server (python scripts/mock_lake_server.py) at url, for testing only;
-#                an empty url means MOCK_LAKE_URL or http://127.0.0.1:8765.
+#   kind "mock": the local mock lake server (python scripts/mock_lake_server.py) at url, for testing only.
 #   login:       sign in as yourself: your user ID in ANALYSIS_USER; the password is asked once per source and
 #                never stored.
-# Change a setting here, or with an environment variable ANALYSIS_<SOURCE>_<SETTING> (e.g. ANALYSIS_SAMPLE_LAKE_URL);
-# ANALYSIS_LAKE=mock sends every query to the mock server.
+# Each source keeps its own settings, so one script can read several sources: change them here, in this file.
 SOURCES = {
 __SOURCES__}
 INPUTS = Path(os.getenv("ANALYSIS_INPUTS", __INPUTS__)).resolve()   # the user's input files (attachments)
 
 
-def setting(source, key):
-    value = os.getenv(f"ANALYSIS_{source.upper()}_{key.upper()}")
-    if value is None and key == "kind":
-        value = os.getenv("ANALYSIS_LAKE")
-    if value is None:
-        return SOURCES[source][key]
-    return value.lower() in ("yes", "true", "1") if key == "login" else value
-
-
 def run_sql(sql: str, source: str) -> pd.DataFrame:
     """One read-only SELECT on one data source."""
-    if setting(source, "kind") == "odbc":
+    src = SOURCES[source]
+    if src["kind"] == "odbc":
         import pyodbc                                          # the server's ODBC driver must be installed
-        dsn = setting(source, "odbc").rstrip(";")
-        if setting(source, "login"):                         # braced values: a ; or = in them cannot break the string
+        dsn = src["odbc"].rstrip(";")
+        if src["login"]:                         # braced values: a ; or = in them cannot break the string
             user, pwd = (v.replace("}", "}}") for v in (_user(), _password(source)))
             dsn += f";UID={{{user}}};PWD={{{pwd}}}"
         conn = pyodbc.connect(dsn, readonly=True, autocommit=True)
@@ -481,10 +471,10 @@ def run_sql(sql: str, source: str) -> pd.DataFrame:
                                              columns=[d[0] for d in cur.description])
         finally:
             conn.close()
-    url = (setting(source, "url") or os.getenv("MOCK_LAKE_URL", "http://127.0.0.1:8765")).rstrip("/") + "/query"
+    url = src["url"].rstrip("/") + "/query"
     req = urllib.request.Request(url, data=json.dumps({"sql": sql}).encode(),
                                  headers={"Content-Type": "application/json"})
-    if setting(source, "login") or os.getenv("ANALYSIS_USER"):
+    if src["login"] or os.getenv("ANALYSIS_USER"):
         from base64 import b64encode
         token = b64encode(f"{_user()}:{_password(source)}".encode()).decode()
         req.add_header("Authorization", f"Basic {token}")

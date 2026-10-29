@@ -10,9 +10,9 @@ read the section relevant to your task before changing code. `docs/setup.md` has
 - UI: `streamlit run app.py`
 - Backend check: `python scripts/smoke_model.py --backend ollama` (or `--backend claude`: Haiku via the Claude Code CLI;
   `--backend chatgpt`: ChatGPT or any OpenAI-compatible API, see `agent/backends/openai_api.py`)
-- Mock lake server (closer to production): `MOCK_LAKE_CONNECTOR=sample_lake python scripts/mock_lake_server.py`, then run with
-  `CONNECTOR_SAMPLE_LAKE_KIND=mock` (per-user sign-in: start the server with `MOCK_LAKE_USERS=analyst:secret` and
-  the agent with `CONNECTOR_SAMPLE_LAKE_NEEDS_LOGIN=yes`)
+- Mock lake server (closer to production): `python scripts/mock_lake_server.py` (every connector with local data, each
+  at the `URL` in its connector.py), then set `KIND = "mock"` in that connector.py (per-user sign-in: start the server
+  with `MOCK_LAKE_USERS=analyst:secret` and set `NEEDS_LOGIN = True`)
 - Replay script of a conversation: `python cli.py --export-script RUN_ID` (or the app's Export button)
 - Analysis run: `python cli.py --backend claude "/usage_comparison RWA by division, FY2025Q3 end vs latest"` (follow-up: `--resume RUN_ID "..."`)
 - Evals: `python scripts/eval.py --backend claude` (golden tasks in `tests/golden/`; results in `runs/evals/`). Run before and
@@ -38,6 +38,8 @@ read the section relevant to your task before changing code. `docs/setup.md` has
   `resolve_pending` (LangGraph `Command(resume=...)`).
 - The data lake sign-in (`agent/credentials.py`) lives in memory only: never write it to state, logs, checkpoints,
   settings, prompts or error text.
+- Connections (connection string, URL) are set only in each connector's `connector.py`, never in environment
+  variables: the agent connects to several sources at once.
 - No sample connector, dataset or sample data is hard-coded in the core (`agent/`, `app.py`, `cli.py`, `scripts/`,
   prompts): they are extension modules under `extensions/connectors/<name>/` (`connector.py`, `datasets/*.md`,
   `sample.py` with `write()` and optional `inputs()`). Core code finds them through `agent.connectors`; only tests

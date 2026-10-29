@@ -2,7 +2,8 @@
 
 KIND is odbc (pyodbc, with CONNECTION_STRING below), mock (the local mock lake server, URL), sqlite (a folder of
 CSVs, DATA = "data") or custom (define connect, list_datasets and, optionally, partitions and source in this file; see
-agent/connectors/__init__.py). Any constant can be overridden at run time with CONNECTOR_<NAME>_<CONSTANT>.
+agent/connectors/__init__.py). The connection is set here only, never in an environment variable: each connector
+has its own, so the agent can use several sources at once.
 Describe each dataset the agent may query in datasets/<name>.md (copy datasets/_template.md): only described datasets
 can be queried.
 """

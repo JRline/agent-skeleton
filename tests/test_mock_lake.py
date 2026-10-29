@@ -1,6 +1,5 @@
 """The mock lake server (a separate, read-only process) and the agent's client for it."""
 import json
-import threading
 import urllib.request
 from unittest import mock
 
@@ -9,25 +8,13 @@ from agent import connectors
 from agent.connectors import mock as mock_kind
 from agent.datalake import LakeError, get_lake
 from agent.tools import ToolContext, dispatch
-from scripts import mock_lake_server as server
 
 from tests.helpers import STD, TempDirs
 
 
 class MockLakeServer(TempDirs):
     def start(self, **kw):
-        srv = server.serve(0, (config.connectors_dir() / "sample_lake" / "data"), quiet=True, **kw)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        self.addCleanup(srv.server_close)
-        self.addCleanup(srv.shutdown)
-        url = f"http://127.0.0.1:{srv.server_address[1]}"
-        env = mock.patch.dict("os.environ", {"MOCK_LAKE_URL": url})
-        env.start()
-        self.addCleanup(env.stop)
-        lake = mock.patch.dict("os.environ", {"CONNECTOR_SAMPLE_LAKE_KIND": "mock"})
-        lake.start()
-        self.addCleanup(lake.stop)
-        return url
+        return self.serve_mock(use=True, **kw)
 
     def test_views_and_queries_go_through_the_server(self):
         self.start()
@@ -83,10 +70,9 @@ class MockLakeServer(TempDirs):
             self.assertIn("usage_limits", mock_kind.list_datasets(conn))
 
     def test_server_down_gives_a_clear_message(self):
-        with mock.patch.dict("os.environ", {"MOCK_LAKE_URL": "http://127.0.0.1:9"}), \
-                mock.patch.dict("os.environ", {"CONNECTOR_SAMPLE_LAKE_KIND": "mock"}):
-            ctx = ToolContext(run_id="r1", run_dir=config.RUNS_DIR / "r1")
-            obs = dispatch("list_datasets", {}, ctx, "list_datasets-1")
+        connectors.OVERRIDES["sample_lake"] = {"kind": "mock", "url": "http://127.0.0.1:9"}
+        ctx = ToolContext(run_id="r1", run_dir=config.RUNS_DIR / "r1")
+        obs = dispatch("list_datasets", {}, ctx, "list_datasets-1")
         self.assertFalse(obs["ok"])
         self.assertIn("python scripts/mock_lake_server.py", obs["error"])
 

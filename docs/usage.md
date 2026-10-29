@@ -46,14 +46,15 @@ How a session works, the tools and skills, the data lake and attachments, and th
   call to the server. They stay in the app's memory for your browser session only: never saved, logged or sent to
   the model, and masked in any error. **Sign out** or **End session** forgets them. Until you sign in, its tools
   tell the agent to ask you to. CLI: `--sign-in <connector>=<user id>` (the password is asked without echo). Try it
-  locally: `MOCK_LAKE_CONNECTOR=sample_lake MOCK_LAKE_USERS=analyst:secret python scripts/mock_lake_server.py`, then
-  `CONNECTOR_SAMPLE_LAKE_KIND=mock CONNECTOR_SAMPLE_LAKE_NEEDS_LOGIN=yes streamlit run app.py`.
+  locally: `MOCK_LAKE_USERS=analyst:secret python scripts/mock_lake_server.py`, set `KIND = "mock"` and
+  `NEEDS_LOGIN = True` in `extensions/connectors/sample_lake/connector.py`, then `streamlit run app.py`.
 - **The sample connector** `sample_lake` holds synthetic data (built by `python scripts/setup_local.py` into its
   git-ignored `data/` folder, outside the sandbox, so file tools can't see it):
   - by default it is `kind: sqlite`, an in-process read-only SQLite copy, used by the tests;
-  - `CONNECTOR_SAMPLE_LAKE_KIND=mock` reaches it through the **mock lake server** instead, closer to production: a
-    separate process over HTTP, read-only on the server side, with optional per-user sign-in or token and
-    simulated latency (`MOCK_LAKE_CONNECTOR=sample_lake python scripts/mock_lake_server.py` in another terminal).
+  - `KIND = "mock"` in its `connector.py` reaches it through the **mock lake server** instead, closer to production:
+    a separate process over HTTP at the connector's `URL`, read-only on the server side, with optional per-user
+    sign-in or token and simulated latency (`python scripts/mock_lake_server.py` in another terminal serves every
+    connector with local data, each at its own URL).
   - Its one dataset, `usage_limits` (`datasets/usage_limits.md`), is a realistic usage-and-limits table: DemoBank
     Group's RWA and leverage exposure under JFSA Basel III in JPY millions, partitioned by fiscal year in
     `partition_key` (`FY2025`, 1 April to 31 March, 244 Tokyo business days). Dimensions that must be filtered (or
@@ -120,8 +121,8 @@ How a session works, the tools and skills, the data lake and attachments, and th
   as cells. The analysis comes first, as plain code; the support code for the checks comes after it:
   - **Setup**: `SOURCES`, one entry per data source (connector) the queries used; each query goes back to its
     own source. A source is a server over ODBC (the connection string from its connector; your user ID in `ANALYSIS_USER`; the password is asked once per source) or the mock lake server.
-    Change a setting in the file or with `ANALYSIS_<SOURCE>_<SETTING>` (e.g. `ANALYSIS_SAMPLE_LAKE_URL`);
-    `ANALYSIS_LAKE=mock` sends every query to the mock server. Input files from `ANALYSIS_INPUTS`.
+    Each source keeps its own settings (from its connector); change them in the file. Input files from
+    `ANALYSIS_INPUTS`.
   - **Steps**: every read of your files, every successful `sql_query` and `export_query` and every approved
     `run_python` code, unchanged and in order, each with the reviewer's plain explanation as a comment and its result in a named
     variable (e.g. `rwa_by_division = run_sql(SQL, "sample_lake")`); each instruction and your answers to the

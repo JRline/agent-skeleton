@@ -1,8 +1,9 @@
 """Mock data lake server: a stand-in for the remote, read-only data lake cluster, for local testing only.
 
 Run it in its own terminal (standard library + pandas only, nothing to install):
-    MOCK_LAKE_CONNECTOR=<name> python scripts/mock_lake_server.py   # http://127.0.0.1:8765, that connector's data
-Then start the agent with CONNECTOR_<NAME>_KIND=mock (that connector, reached over HTTP).
+    python scripts/mock_lake_server.py [connector ...]
+serves each connector that has local data (default all) at the URL in its connector.py, each on its own port, so
+several sources are up at once. Then set KIND = "mock" in a connector.py to reach it over HTTP.
 
 Why a separate process: the agent should meet the lake the way it meets the production lake, as a remote service it can only
 query. Its data is outside the agent's sandbox, the connection can fail or be slow, and the server itself refuses
@@ -12,8 +13,7 @@ API (JSON over HTTP, localhost only):
     GET  /datasets                   -> {"datasets": ["<dataset>", ...]}
     POST /query {"sql": "SELECT ..."} -> {"columns": [...], "rows": [[...]], "truncated": false}
     errors                           -> HTTP 400/401 with {"error": "..."}
-Optional settings (environment): MOCK_LAKE_PORT (8765), MOCK_LAKE_CONNECTOR (whose local data to serve; default the
-first connector that has a data folder), MOCK_LAKE_DATA (a data folder instead), MOCK_LAKE_USERS ("user:password,..."; if set, each
+Optional server settings (environment): MOCK_LAKE_USERS ("user:password,..."; if set, each
 client signs in with its own user ID and password, HTTP basic auth), MOCK_LAKE_TOKEN (if set,
 clients must send "Authorization: Bearer <token>"), MOCK_LAKE_LATENCY_MS (0; simulated network delay),
 MOCK_LAKE_MAX_ROWS (100000).
@@ -113,37 +113,51 @@ def make_handler(lake: ReadOnlyLake, token: str = "", latency_ms: int = 0, max_r
     return Handler
 
 
-def default_data() -> Path:
-    """The folder of CSVs to serve. The server names no connector or dataset itself: those are extensions."""
-    if os.getenv("MOCK_LAKE_DATA"):
-        return Path(os.environ["MOCK_LAKE_DATA"])
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from agent import connectors
-    conns = connectors.all_connectors()
-    name = os.getenv("MOCK_LAKE_CONNECTOR")
-    for conn in [conns[name]] if name in conns else conns.values():
-        if conn.path("data", "data").is_dir():
-            return conn.path("data", "data")
-    raise SystemExit(f"No local data to serve (connector {name or 'any'}): set MOCK_LAKE_CONNECTOR or MOCK_LAKE_DATA, "
-                     "or run python scripts/setup_local.py.")
-
-
-def serve(port: int = 8765, data_dir: Path | None = None, token: str = "", latency_ms: int = 0,
+def serve(port: int, data_dir: Path, token: str = "", latency_ms: int = 0,
           max_rows: int = 100_000, quiet=False, users: dict[str, str] | None = None) -> ThreadingHTTPServer:
-    """Build the server (bound to localhost only). Call serve_forever() on it; tests use port 0."""
-    lake = ReadOnlyLake(data_dir or default_data())
+    """Build one server (bound to localhost only). Call serve_forever() on it; tests use port 0."""
+    lake = ReadOnlyLake(data_dir)
     return ThreadingHTTPServer(("127.0.0.1", port), make_handler(lake, token, latency_ms, max_rows, quiet, users))
 
 
+def serve_connectors(names: list[str]) -> list[tuple[str, ThreadingHTTPServer]]:
+    """One server per connector with local data (all, or those named), each on the port of its own URL in
+    connector.py, so the agent reaches several sources at once. The server names no connector itself."""
+    import sys
+    from urllib.parse import urlsplit
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from agent import connectors
+    conns = connectors.all_connectors()
+    unknown = [n for n in names if n not in conns]
+    if unknown:
+        raise SystemExit(f"Unknown connector(s): {', '.join(unknown)}. Known: {', '.join(conns)}.")
+    out = []
+    for conn in [conns[n] for n in names] or conns.values():
+        data, url = conn.path("data", "data"), conn.setting("url")
+        if not url or not data.is_dir():
+            continue
+        try:
+            out.append((conn.name, serve(urlsplit(url).port or 80, data, os.getenv("MOCK_LAKE_TOKEN", ""),
+                                         int(os.getenv("MOCK_LAKE_LATENCY_MS", "0")),
+                                         int(os.getenv("MOCK_LAKE_MAX_ROWS", "100000")),
+                                         users=_users(os.getenv("MOCK_LAKE_USERS", "")))))
+        except OSError as e:
+            raise SystemExit(f"{conn.name}: cannot listen at {url} ({e.strerror}); is a mock server already running?")
+    if not out:
+        raise SystemExit("No connector with a URL and local data to serve: run python scripts/setup_local.py.")
+    return out
+
+
 if __name__ == "__main__":
-    DATA = default_data()
-    server = serve(int(os.getenv("MOCK_LAKE_PORT", "8765")), DATA, os.getenv("MOCK_LAKE_TOKEN", ""),
-                   int(os.getenv("MOCK_LAKE_LATENCY_MS", "0")), int(os.getenv("MOCK_LAKE_MAX_ROWS", "100000")),
-                   users=_users(os.getenv("MOCK_LAKE_USERS", "")))
-    host, port = server.server_address[:2]
-    print(f"Mock data lake (read-only, synthetic) on http://{host}:{port} serving {DATA}. Ctrl+C to stop.")
+    import sys
+    servers = serve_connectors(sys.argv[1:])
+    for name, server in servers[1:]:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    for name, server in servers:
+        host, port = server.server_address[:2]
+        print(f"Mock data lake (read-only, synthetic) for {name} on http://{host}:{port}.")
+    print("Ctrl+C to stop.")
     try:
-        server.serve_forever()
+        servers[0][1].serve_forever()
     except KeyboardInterrupt:
         pass

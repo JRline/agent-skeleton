@@ -3,14 +3,12 @@ import os
 import re
 import subprocess
 import sys
-import threading
 
 import pandas as pd
 
 from agent import config, replay
 from agent.backends.fake import FakeModel
 from agent.loop import run
-from scripts import mock_lake_server as server
 
 from tests.helpers import STD, OK, PLAN, TempDirs, j
 
@@ -49,18 +47,11 @@ class Replay(TempDirs):
         self.state = run("RWA change by book", analysis_conversation(), approve=lambda e: True,
                          toolkits=["files", "analysis", "datalake"])
         self.assertEqual(self.state["status"], "finished")
+        self.reserve_url()                   # the exported scripts point at the server each test starts
 
-    def serve_lake(self):
-        from agent import connectors
-        srv = server.serve(0, connectors.enabled()["sample_lake"].path("data"), quiet=True)   # follows copy_lake
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        self.addCleanup(srv.server_close)
-        self.addCleanup(srv.shutdown)
-        return f"http://127.0.0.1:{srv.server_address[1]}"
-
-    def run_script(self, path, url):
-        env = {**os.environ, "ANALYSIS_LAKE": "mock", "MOCK_LAKE_URL": url,
-               "ANALYSIS_INPUTS": str(config.inputs_dir())}
+    def run_script(self, path):
+        self.serve_mock()                    # serves the sample data, or the test's changed copy (copy_lake)
+        env = {**os.environ, "ANALYSIS_INPUTS": str(config.inputs_dir())}
         return subprocess.run([sys.executable, str(path)], capture_output=True, text=True, env=env, timeout=60)
 
     def test_script_has_the_exact_steps_in_cells(self):
@@ -79,7 +70,7 @@ class Replay(TempDirs):
         self.assertGreater(text.index("compare(exp, R[ref])"), text.index("# %% Checks"))
 
     def test_replay_matches_and_rebuilds_the_answer(self):
-        out = self.run_script(replay.export(self.state), self.serve_lake())
+        out = self.run_script(replay.export(self.state))
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertRegex(out.stdout, r"sql_query-\d+\s+MATCH")
         self.assertRegex(out.stdout, r"run_python-\d+\s+MATCH")
@@ -94,7 +85,7 @@ class Replay(TempDirs):
                & (df.method == "BOOKED") & (df.component_code == "MKT_INT")
                & (df.product_id == "GM-RT-IRS") & (df.location == "Tokyo"), "amount"] += 100   # restated
         df.to_csv(lake, index=False)
-        out = self.run_script(path, self.serve_lake())
+        out = self.run_script(path)
         self.assertEqual(out.returncode, 1)
         self.assertRegex(out.stdout, r"sql_query-\d+\s+DIFF: sum\(rwa\)")
         self.assertIn("2 step(s) differ", out.stdout)
@@ -110,7 +101,7 @@ class Replay(TempDirs):
         text = path.read_text()
         path.write_text(text.replace("p.columns = ['book', 'before', 'after']",
                                      "p.columns = ['book', 'before', 'after']\n    p.loc[p.book == 'Global Markets', 'before'].iloc[0]"))
-        out = self.run_script(path, self.serve_lake())
+        out = self.run_script(path)
         self.assertEqual(out.returncode, 1)
         self.assertIn("IndexError", out.stderr)                                    # the traceback, where it ran
         self.assertRegex(out.stdout, r"sql_query-\d+\s+DIFF")                       # earlier steps still checked
@@ -199,14 +190,8 @@ class ExportReplay(TempDirs):
         state = run("Export RWA rows", m, approve=lambda e: True, toolkits=["datalake"])
         text = replay.build_script(state)
         self.assertIn("data export from sample_lake to a file for the user (export_query-1)", text)
-        from agent import connectors
-        srv = server.serve(0, connectors.enabled()["sample_lake"].path("data"), quiet=True,
-                           users={"analyst": "test-pass"})
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        self.addCleanup(srv.server_close)
-        self.addCleanup(srv.shutdown)
-        env = {**os.environ, "ANALYSIS_LAKE": "mock", "MOCK_LAKE_URL": f"http://127.0.0.1:{srv.server_address[1]}",
-               "ANALYSIS_USER": "analyst", "ANALYSIS_INPUTS": str(config.inputs_dir())}
+        self.serve_mock(users={"analyst": "test-pass"})
+        env = {**os.environ, "ANALYSIS_USER": "analyst", "ANALYSIS_INPUTS": str(config.inputs_dir())}
         out = subprocess.run([sys.executable, str(replay.export(state))], input="test-pass\n", capture_output=True,
                              text=True, env=env, timeout=60)
         self.assertEqual(out.returncode, 0, out.stderr)
@@ -254,16 +239,9 @@ class TwoConnectors(TempDirs):
         self.assertIn("two = run_sql(SQL, 'sample_lake')", text)
         self.assertIn("fx = run_sql(SQL, 'fx_lake')", text)
         self.assertIn("'fx_lake': {'kind': 'mock'", text)
-        from agent import connectors
-        urls = {}
-        for name, data in (("SAMPLE_LAKE", connectors.enabled()["sample_lake"].path("data")), ("FX_LAKE", self.fx_data)):
-            srv = server.serve(0, data, quiet=True)
-            threading.Thread(target=srv.serve_forever, daemon=True).start()
-            self.addCleanup(srv.server_close)
-            self.addCleanup(srv.shutdown)
-            urls[f"ANALYSIS_{name}_URL"] = f"http://127.0.0.1:{srv.server_address[1]}"
-        env = {**os.environ, **urls, "ANALYSIS_LAKE": "mock", "ANALYSIS_INPUTS": str(config.inputs_dir())}
-        env.pop("MOCK_LAKE_URL", None)
+        sample, fx = self.serve_mock("sample_lake"), self.serve_mock("fx_lake", self.fx_data)
+        self.assertNotEqual(sample, fx)                               # two sources at once, each at its own URL
+        env = {**os.environ, "ANALYSIS_INPUTS": str(config.inputs_dir())}
         out = subprocess.run([sys.executable, str(replay.export(state))], capture_output=True, text=True, env=env,
                              timeout=60)
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)

@@ -13,8 +13,9 @@ A kind module provides:
   limit_sql(sql, n) -> sql                                       (optional: the dialect's row limit)
   source(connector) -> str                                       (optional: identifies the server, for caching)
 
-Settings: CONNECTORS (comma-separated names; default every folder not starting with "_") picks the enabled ones, and
-CONNECTOR_<NAME>_<KEY> overrides a constant, e.g. CONNECTOR_SAMPLE_LAKE_KIND=mock.
+Settings: CONNECTORS (comma-separated names; default every folder not starting with "_") picks the enabled ones.
+A connection is set only in its connector.py, never in an environment variable: one process connects to several
+sources at once, each with its own connection string or URL.
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ from pathlib import Path
 from .. import config
 
 ERRORS: list[str] = []                 # connectors that could not be loaded (shown in the UI, never fatal)
-OVERRIDES: dict[str, dict] = {}        # name -> settings set in code (tests)
+OVERRIDES: dict[str, dict] = {}        # name -> settings set in code (tests: a mock server's port, a data copy)
 
 
 def parse_front_matter(text: str) -> tuple[dict, str]:
@@ -91,8 +92,7 @@ class Connector:
     code: object = field(default=None, repr=False)     # the loaded connector.py
 
     def setting(self, key: str, default: str = "") -> str:
-        env = os.getenv(f"CONNECTOR_{self.name.upper()}_{key.upper()}")
-        return env if env is not None else str(self.settings.get(key, default))
+        return str(self.settings.get(key, default))
 
     def path(self, key: str, default: str = "") -> Path:
         value = Path(self.setting(key, default)).expanduser()

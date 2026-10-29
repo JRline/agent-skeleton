@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import shutil
+import socket
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -33,8 +35,33 @@ class TempDirs(unittest.TestCase):
         """A private copy of the lake data, for a test that changes it."""
         copy = Path(self._tmp) / "lake"
         shutil.copytree(LAKE, copy)
-        connectors.OVERRIDES["sample_lake"] = {"data": str(copy)}
+        connectors.OVERRIDES.setdefault("sample_lake", {})["data"] = str(copy)
         return copy
+
+    def reserve_url(self, name: str = "sample_lake") -> str:
+        """A free local port for a connector's mock server, set as its URL (as its connector.py would set it), so a
+        replay script exported before the server starts already points at it."""
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            url = f"http://127.0.0.1:{s.getsockname()[1]}"
+        connectors.OVERRIDES.setdefault(name, {})["url"] = url
+        return url
+
+    def serve_mock(self, name: str = "sample_lake", data=None, use: bool = False, **kw) -> str:
+        """A mock lake server for one connector (its data, or `data`), at its reserved URL or a free port. use=True
+        also switches the connector to KIND mock; `kw` go to the server (users, token, max_rows)."""
+        from urllib.parse import urlsplit
+        from scripts import mock_lake_server as server
+        over = connectors.OVERRIDES.setdefault(name, {})
+        port = urlsplit(over["url"]).port if "url" in over else 0
+        srv = server.serve(port, data or connectors.all_connectors()[name].path("data", "data"), quiet=True, **kw)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        over["url"] = f"http://127.0.0.1:{srv.server_address[1]}"
+        if use:
+            over["kind"] = "mock"
+        return over["url"]
 
     def tearDown(self):
         config.RUNS_DIR, config.SANDBOX_DIR, config.SETTINGS_DIR = self._saved
