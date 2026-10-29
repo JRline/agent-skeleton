@@ -84,21 +84,6 @@ def enabled_tools(toolkits) -> dict[str, Tool]:
     return {n: t for n, t in TOOLS.items() if t.toolkit in allowed}
 
 
-def render_tools(tools: dict[str, Tool] | None = None) -> str:
-    """Tool list for the system prompt: name, description, argument schema."""
-    lines = []
-    for t in (tools or TOOLS).values():
-        props = t.args.model_json_schema().get("properties", {})
-        required = set(t.args.model_json_schema().get("required", []))
-        arg_desc = ", ".join(
-            f'"{k}": {v.get("type", "any")}{"" if k in required else " (optional)"}'
-            for k, v in props.items()
-        )
-        flag = " [needs user approval]" if t.risky is True else " [user approval for data reads]" if t.risky else ""
-        lines.append(f"- {t.name}{flag}: {t.desc}\n  input: {{{arg_desc}}}")
-    return "\n".join(lines)
-
-
 # ---------------------------------------------------------------- helpers
 
 class ToolError(Exception):

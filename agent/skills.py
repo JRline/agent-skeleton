@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import config
+from .connectors import parse_front_matter    # one front-matter format for skills, connectors and datasets
 
 
 @dataclass
@@ -33,14 +34,7 @@ class Skill:
 
 
 def parse_skill(text: str) -> Skill:
-    meta, body = {}, text
-    m = re.match(r"---\s*\n(.*?)\n---\s*\n(.*)", text, flags=re.S)
-    if m:
-        for line in m.group(1).splitlines():
-            if ":" in line:
-                key, value = line.split(":", 1)
-                meta[key.strip()] = value.strip()
-        body = m.group(2)
+    meta, body = parse_front_matter(text)
     sections = {h.strip().lower(): c for h, c in re.findall(r"^##\s+(.+?)\s*\n(.*?)(?=^##\s|\Z)", body, re.M | re.S)}
     items = lambda s: [re.sub(r"^\s*(?:\d+[.)]|[-*])\s+", "", line).strip()
                        for line in s.splitlines() if re.match(r"^\s*(?:\d+[.)]|[-*])\s+", line)]

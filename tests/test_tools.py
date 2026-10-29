@@ -2,7 +2,7 @@ import json
 import unittest
 
 from agent import config
-from agent.tools import ToolContext, dispatch, render_tools
+from agent.tools import ToolContext, dispatch
 
 from tests.helpers import STD, TempDirs
 
@@ -131,11 +131,6 @@ class Dispatch(TempDirs):
     def test_ask_user_is_not_dispatchable(self):
         obs = dispatch("ask_user", {"question": "?"}, self.ctx(), "a")
         self.assertFalse(obs["ok"])
-
-    def test_render_tools_marks_risky(self):
-        text = render_tools()
-        self.assertIn("write_file [needs user approval]", text)
-        self.assertIn('"path": string', text)
 
 
 if __name__ == "__main__":

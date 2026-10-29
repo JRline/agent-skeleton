@@ -31,7 +31,8 @@ OVERRIDES: dict[str, dict] = {}        # name -> settings set in code (tests)
 
 
 def parse_front_matter(text: str) -> tuple[dict, str]:
-    """`---` / `key: value` lines / `---`, then the body."""
+    """`---` / `key: value` lines / `---`, then the body. Shared by skills, connectors and datasets; a line starting
+    with # and a trailing " # comment" are ignored."""
     m = re.match(r"---\s*\n(.*?)\n---\s*\n?(.*)", text, flags=re.S)
     if not m:
         return {}, text

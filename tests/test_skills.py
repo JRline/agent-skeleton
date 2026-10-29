@@ -32,6 +32,12 @@ class Skills(TempDirs):
         self.assertEqual(s.steps, ["First step.", "Second step."])
         self.assertEqual(s.checks, ["A check."])
 
+    def test_skill_front_matter_ignores_comments(self):
+        """Skills use the connectors' front-matter parser: a trailing comment is not part of the value."""
+        s = parse_skill("---\nname: x\n# a note\ndatasets: usage_limits, fx_rates    # optional\n---\n"
+                        "## Steps\n1. Go.\n")
+        self.assertEqual((s.name, s.datasets, s.steps), ("x", ["usage_limits", "fx_rates"], ["Go."]))
+
     def test_bundled_skills_parse(self):
         names = {s.name for s in list_skills()}
         self.assertTrue({"usage_comparison", "usage_overview", "file_summary"} <= names)
