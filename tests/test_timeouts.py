@@ -53,10 +53,8 @@ class ToolTimeouts(TempDirs):
         self.assertEqual(TOOLS["sql_query"].timeout_s(), 1234)
 
     def test_the_sql_default_is_fifteen_minutes(self):
-        import importlib
         import os
         if "SQL_TIMEOUT_S" in os.environ:
             self.skipTest("SQL_TIMEOUT_S is set in this environment")
-        from pathlib import Path
-        src = Path(importlib.util.find_spec("agent.config").origin).read_text()
-        self.assertIn('SQL_TIMEOUT_S = int(os.getenv("SQL_TIMEOUT_S", "900"))', src)
+        from agent import config
+        self.assertEqual(config.Settings.model_fields["sql_timeout_s"].default, 900)

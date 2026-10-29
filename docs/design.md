@@ -98,7 +98,7 @@ agent/              # the framework (fixed)
   prompts/          # system.md, planner.md, reviewer.md, action_review.md, finisher.md
   settings.py       # user prompt settings: role, answer style, template overrides (settings/prompts.json)
   ui/               # results_page.py (result tables), sources.py ([ref: …] → numbered Sources list)
-  config.py         # budgets, limits, effort policy, paths, backend choice
+  config.py         # budgets, limits, effort policy, paths, backend choice; environment read once (Settings)
 extensions/         # added per environment (contract: docs/extensions.md); "_" names are templates, never loaded
   connectors/<name>/  connector.md (kind, sign-in, settings, shared notes), datasets/<dataset>.md (one per table),
                     #   optional connector.py (kind custom) and sample.py (synthetic data into a git-ignored data/)

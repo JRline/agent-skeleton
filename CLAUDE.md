@@ -165,7 +165,8 @@ from the connector's optional `sample.py` (git-ignored `data/`, never inside `sa
   Users can set a conversation's step limit (sidebar "Step limit per instruction", CLI `--max-steps`; 0 = automatic).
 - Libraries over custom code (2026-10-29): sqlglot parses SQL (guard, tables, required filters, row limits in the
   connector's `dialect`, formatting); Parquet table cache (no pickles); Jinja2 page template for the HTML export;
-  tenacity retries. All four are pinned in requirements.txt.
+  tenacity retries; pydantic-settings reads and checks the environment once (config.Settings). All pinned in
+  requirements.txt.
 
 ## Next tasks, in order
 1. Pin `requirements.txt` to production's exact Python and package versions (ask the owner). The grid number

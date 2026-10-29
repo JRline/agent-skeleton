@@ -118,6 +118,10 @@ When a real API is provided, the swap is a setting; nothing else changes.
 
 ## Configuration
 
+The agent's own variables below (not the backend-specific ones) are read once at start by `agent/config.py`
+(`Settings`, pydantic-settings), typed and checked: a bad value, e.g. `SQL_TIMEOUT_S=abc`, stops the agent with the
+variable named.
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `LLM_BACKEND` | `fake` | `fake`, `ollama`, `claude`, `chatgpt`, `langchain` or `prod` |
