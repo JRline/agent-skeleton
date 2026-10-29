@@ -352,6 +352,16 @@ guidance and the planner prompt say so, after a run offered a dataset skill for 
   (`MOCK_LAKE_USERS`), token (`MOCK_LAKE_TOKEN`) and latency (`MOCK_LAKE_LATENCY_MS`); when it is down, tools return
   "Data lake server not reachable … Start it with: python scripts/mock_lake_server.py".
 
+- **Test datasets keyed by their own codes**, to exercise joins across sources: `credit_exposures` on
+  `sample_lake` (month-end credit RWA and EAD by `portfolio_code`, approach and rating grade) and `desk_risk` on
+  a second connector, `market_lake` (its own data folder; in production its own connection string,
+  `connection_env: MARKET_ODBC`): daily VaR, stressed VaR and ES by `desk_code`. Neither knows `product_id`: the
+  user's local mapping file `inputs/book_mapping.csv` (source_system, source_code, product_id, location; written
+  with the sample inputs) links them to `usage_limits`, and the agent joins the extracts in `run_python`. Credit RWA
+  summed over grades equals `usage_limits` (USED, CLOSED, BOOKED, the credit components) on the mapped keys, so a
+  join can be checked exactly (`tests/test_join_sources.py`). `build_samples` runs a connector's `sample.py`
+  whenever one of its documented datasets has no data file.
+
 **Sign-in (`credentials.py`).** A connector with `needs_login: yes` gets its own **Data sign-in: <name>** section in
 the sidebar (user ID, password; the CLI: `--sign-in <name>=<user id>`, password asked without echo). The sign-in is
 checked with one catalogue call, then:

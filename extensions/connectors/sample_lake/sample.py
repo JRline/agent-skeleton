@@ -1,4 +1,7 @@
-"""Generate the synthetic dataset `usage_limits` (data/usage_limits.csv in this connector's folder): daily RWA and leverage exposure.
+"""Generate the synthetic datasets of this connector (data/*.csv): `usage_limits`, daily RWA and leverage exposure, and
+`credit_exposures`, the credit system's month-end view of the same credit RWA. Also the shared test codes: the
+`market_lake` connector's `desk_risk` (generate_market) and the local mapping file inputs/book_mapping.csv
+(mapping_csv) use them, so the three can be joined.
 
 All data is synthetic and illustrative. It mimics a typical usage-and-limits dataset in a data lake:
 - partitioned by fiscal year in `partition_key` (e.g. FY2025);
@@ -200,11 +203,95 @@ def _row(d, measure, region, division, line, product, code, scenario, version, m
             "product": product, "product_id": code, "amount": float(amount)}
 
 
+# ---------------------------------------------------------------- systems keyed by their own codes
+# The credit and market risk systems do not know product_id: they key by portfolio and desk codes. The user's local
+# mapping table (inputs/book_mapping.csv) links each code to a product_id and location of usage_limits.
+CREDIT_CODES = ("CRD_STD", "CRD_FND", "CRD_ADV", "CRD_SLT")
+GRADES = {"A": (0.20, 0.25), "B": (0.35, 0.45), "C": (0.25, 0.75), "D": (0.15, 1.20), "E": (0.05, 2.50)}  # share, RW
+RISK_CLASS = {"Rates": "IR", "FX": "FX", "Equities": "EQ"}
+MARKET_LAST = date(2026, 3, 27)
+
+
+def codes() -> pd.DataFrame:
+    """source_system, source_code, product_id, location: one credit portfolio per product and location with credit
+    RWA, one trading desk per product and location with market risk RWA. The codes are opaque on purpose."""
+    rows, credit, desks = [], 0, 0
+    for product, (division, line, code, regions, amounts) in sorted(PRODUCTS.items(), key=lambda kv: kv[1][2]):
+        for region in regions:
+            if any(m in CREDIT_CODES for m in amounts):
+                credit += 1
+                rows.append({"source_system": "credit", "source_code": f"CP{4000 + 37 * credit}",
+                             "product_id": code, "location": region})
+            if any(m.startswith("MKT_") for m in amounts):
+                desks += 1
+                rows.append({"source_system": "market", "source_code": f"DSK-{150 + 11 * desks}",
+                             "product_id": code, "location": region})
+    return pd.DataFrame(rows)
+
+
+def mapping_csv() -> str:
+    return codes().to_csv(index=False)
+
+
+def month_ends(last: date) -> list[str]:
+    """The last business day of each month, up to `last`."""
+    out: dict[tuple, date] = {}
+    for d in business_days():
+        if d <= last:
+            out[(d.year, d.month)] = d
+    return [d.isoformat() for d in out.values()]
+
+
+def generate_credit(usage: pd.DataFrame) -> pd.DataFrame:
+    """Credit RWA by portfolio, approach and internal grade at month ends. Its RWA adds up exactly to usage_limits
+    (USED, CLOSED, BOOKED, the credit components) on the mapped product and location, so a join can be checked."""
+    rng = np.random.default_rng(20250402)
+    portfolio = {(r.product_id, r.location): r.source_code for r in codes().itertuples() if r.source_system == "credit"}
+    src = usage[(usage.scenario == "USED") & (usage.version == "CLOSED") & (usage.method == "BOOKED")
+                & usage.component_code.isin(CREDIT_CODES)
+                & usage.as_of_date.isin(month_ends(LAST[("RWA", "CLOSED")]))]
+    rows = []
+    for r in src.itertuples():
+        shares = np.array([s for s, _ in GRADES.values()]) * rng.uniform(0.8, 1.2, len(GRADES))
+        parts = np.floor(r.amount * shares / shares.sum())
+        parts[-1] += r.amount - parts.sum()                     # integers that add up to the usage amount
+        for (grade, (_, weight)), rwa in zip(GRADES.items(), parts):
+            if rwa:
+                rows.append({"partition_key": PARTITION, "as_of_date": r.as_of_date, "entity": ENTITY,
+                             "currency": CURRENCY, "portfolio_code": portfolio[(r.product_id, r.location)],
+                             "approach": r.component_code, "rating_grade": grade,
+                             "ead": float(np.round(rwa / weight)), "rwa": float(rwa)})
+    return pd.DataFrame(rows).sort_values(["as_of_date", "portfolio_code", "approach", "rating_grade"])
+
+
+def generate_market() -> pd.DataFrame:
+    """Daily VaR, stressed VaR and expected shortfall by trading desk (JPY millions): the market risk system's view,
+    for the market_lake connector. Sized like each desk's market risk RWA, but its own numbers."""
+    rng = np.random.default_rng(20250403)
+    days = [d for d in business_days() if d <= MARKET_LAST]
+    info = {code: (line, amounts) for _, (_, line, code, _, amounts) in PRODUCTS.items()}
+    rows = []
+    for r in codes().itertuples():
+        if r.source_system != "market":
+            continue
+        line, amounts = info[r.product_id]
+        size = (amounts.get("MKT_INT", 0) + amounts.get("MKT_STD", 0)) * REGION_SCALE[r.location] / 40
+        level = size * (1 + np.cumsum(rng.normal(0, 0.02, len(days)))).clip(0.5)
+        for d, es in zip(days, level):
+            var = es / 4.0
+            for metric, value in (("VaR_1D_99", var), ("SVaR_1D_99", var * rng.uniform(1.9, 2.3)),
+                                  ("ES_10D_975", es)):
+                rows.append({"as_of_date": d.isoformat(), "desk_code": r.source_code,
+                             "risk_class": RISK_CLASS[line], "metric": metric, "value": round(float(value), 1)})
+    return pd.DataFrame(rows)
+
+
 def write(path: Path = OUT) -> pd.DataFrame:
-    """The data is generated, never committed: a fresh clone (or a test run) builds the same file from the seed."""
+    """The data is generated, never committed: a fresh clone (or a test run) builds the same files from the seed."""
     df = generate()
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path, index=False, float_format="%.0f")
+    generate_credit(df).to_csv(path.parent / "credit_exposures.csv", index=False, float_format="%.0f")
     return df
 
 

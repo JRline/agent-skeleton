@@ -31,8 +31,8 @@ class MockLakeServer(TempDirs):
 
     def test_views_and_queries_go_through_the_server(self):
         self.start()
-        lake = get_lake()
-        self.assertEqual(lake.list_datasets(), ["usage_limits"])
+        lake = get_lake(None, "sample_lake")
+        self.assertEqual(lake.list_datasets(), ["credit_exposures", "usage_limits"])
         df, truncated = lake.query(f"SELECT SUM(amount) AS rwa FROM usage_limits WHERE as_of_date = '2026-03-26' "
                                    f"AND scenario = 'USED' AND resource = 'RWA' AND {STD}")
         self.assertEqual(df.iloc[0].tolist(), [245463])
@@ -67,12 +67,12 @@ class MockLakeServer(TempDirs):
                 urllib.request.urlopen(req)
             self.assertEqual(cm.exception.code, 400)
             cm.exception.close()
-        self.assertIn("usage_limits", get_lake().list_datasets())               # still there
+        self.assertIn("usage_limits", get_lake(None, "sample_lake").list_datasets())               # still there
 
     def test_the_agent_guard_still_applies_first(self):
         self.start()
         with self.assertRaises(LakeError):
-            get_lake().query("DELETE FROM usage_limits")
+            get_lake(None, "sample_lake").query("DELETE FROM usage_limits")
 
     def test_token_is_required_when_set(self):
         self.start(token="synthetic-dev-token")

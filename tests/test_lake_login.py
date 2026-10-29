@@ -33,7 +33,7 @@ class LakeLogin(TempDirs):
     def test_the_users_own_login_reaches_the_lake(self):
         self.assertEqual(needs_login(), ["sample_lake"])
         credentials.use("r1", "sample_lake", credentials.Login("analyst", SECRET))
-        self.assertEqual(get_lake("r1", "sample_lake").list_datasets(), ["usage_limits"])
+        self.assertEqual(get_lake("r1", "sample_lake").list_datasets(), ["credit_exposures", "usage_limits"])
         obs = dispatch("sql_query", {"sql": SQL, "save_as": "n"},
                        ToolContext(run_id="r1", run_dir=config.RUNS_DIR / "r1"), "sql_query-1")
         self.assertTrue(obs["ok"], obs)

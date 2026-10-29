@@ -152,7 +152,11 @@ from the connector's optional `sample.py` (git-ignored `data/`, never inside `sa
   step MATCHes, and every number in the answers is traced (notes totals included); against restated data the
   affected tasks report DIFF and `[was …]`. Fixed: exports, empty-cell row keys, notes totals, run IDs, sign-in.
   Since then: each query replays on its own connector (`SOURCES`), and a step that fails on changed data is
-  recorded and skipped (`with step(ref)`), with every check in one final Checks cell. 305 unit tests pass.
+  recorded and skipped (`with step(ref)`), with every check in one final Checks cell.
+- Join test data (2026-10-29): `credit_exposures` (sample_lake) and `desk_risk` (new `market_lake` connector) are keyed
+  by their own codes and join to `usage_limits` through `inputs/book_mapping.csv` in run_python. Live Haiku runs of
+  both joins finished correctly (credit reconciles to 0 on 30 keys; market replay MATCHes on two sources).
+  309 unit tests pass.
 
 ## Next tasks, in order
 1. Pin `requirements.txt` to production's exact Python and package versions (ask the owner). The grid number

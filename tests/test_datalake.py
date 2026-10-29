@@ -37,8 +37,8 @@ USAGE_RWA = f"scenario = 'USED' AND resource = 'RWA' AND {STD}"
 
 class SQLiteLake(TempDirs):
     def test_views_describe_and_query(self):
-        lake = datalake.get_lake()
-        self.assertEqual(lake.list_datasets(), ["usage_limits"])
+        lake = datalake.get_lake(None, "sample_lake")
+        self.assertEqual(lake.list_datasets(), ["credit_exposures", "usage_limits"])
         cols = lake.describe("usage_limits")
         self.assertIn("component", cols)
         self.assertIn("amount", cols)
@@ -49,7 +49,7 @@ class SQLiteLake(TempDirs):
         self.assertFalse(truncated)
 
     def test_each_resource_and_version_has_its_own_latest_date(self):
-        df, _ = datalake.get_lake().query("SELECT resource, version, MAX(as_of_date) AS latest FROM usage_limits "
+        df, _ = datalake.get_lake(None, "sample_lake").query("SELECT resource, version, MAX(as_of_date) AS latest FROM usage_limits "
                                           "WHERE partition_key = 'FY2025' AND scenario = 'USED' AND method = 'BOOKED' "
                                           "AND entity = 'DemoBank Group' AND rule = 'JFSA B3' AND currency = 'JPY' "
                                           "GROUP BY resource, version ORDER BY resource, version")
@@ -58,15 +58,15 @@ class SQLiteLake(TempDirs):
                                               ["RWA", "CLOSED", "2026-03-26"], ["RWA", "EARLY", "2026-03-31"]])
 
     def test_partitions_come_from_the_catalogue(self):
-        self.assertEqual(datalake.get_lake().partitions("usage_limits"), ["FY2025"])
+        self.assertEqual(datalake.get_lake(None, "sample_lake").partitions("usage_limits"), ["FY2025"])
 
     def test_row_cap(self):
-        df, truncated = datalake.get_lake().query(f"SELECT * FROM usage_limits WHERE as_of_date = '2026-03-26' "
+        df, truncated = datalake.get_lake(None, "sample_lake").query(f"SELECT * FROM usage_limits WHERE as_of_date = '2026-03-26' "
                                                   f"AND {USAGE_RWA}", max_rows=5)
         self.assertEqual(len(df), 5)
         self.assertTrue(truncated)
 
     def test_connection_itself_refuses_writes(self):
-        conn = datalake.get_lake().connect()
+        conn = datalake.get_lake(None, "sample_lake").connect()
         with self.assertRaises(sqlite3.DatabaseError):
             conn.execute("DELETE FROM usage_limits")

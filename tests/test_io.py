@@ -97,11 +97,11 @@ class LakeLimits(TempDirs):
         self.assertIn(["version", "GROUP BY"], required)
         self.assertIn(["method", "GROUP BY"], required)
         # the dictionary's own query for the latest dates passes: split by resource and version, partition filtered
-        get_lake().query("SELECT resource, version, MAX(as_of_date) AS latest_date FROM usage_limits "
+        get_lake(None, "sample_lake").query("SELECT resource, version, MAX(as_of_date) AS latest_date FROM usage_limits "
                          "WHERE partition_key = 'FY2025' AND scenario = 'USED' AND method = 'BOOKED' AND entity = 'DemoBank Group' "
                          "AND rule = 'JFSA B3' AND currency = 'JPY' GROUP BY resource, version")
         with self.assertRaisesRegex(LakeError, "version"):                          # flash + final would double count
-            get_lake().query("SELECT SUM(amount) FROM usage_limits WHERE partition_key = 'FY2025' AND as_of_date = '2026-03-26' "
+            get_lake(None, "sample_lake").query("SELECT SUM(amount) FROM usage_limits WHERE partition_key = 'FY2025' AND as_of_date = '2026-03-26' "
                              "AND scenario = 'USED' AND resource = 'RWA' AND method = 'BOOKED' "
                              "AND entity = 'DemoBank Group' AND rule = 'JFSA B3' AND currency = 'JPY'")
 

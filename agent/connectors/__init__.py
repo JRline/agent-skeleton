@@ -163,12 +163,13 @@ def datasets() -> dict[str, Dataset]:
 
 
 def build_samples(force: bool = False) -> list[str]:
-    """Run each connector's optional `sample.py` (its `write()` builds synthetic data for local runs) when its data
-    is missing. Data is never committed: a fresh clone builds the same files from the seed."""
+    """Run each connector's optional `sample.py` (its `write()` builds synthetic data for local runs) when a
+    dataset's data is missing. Data is never committed: a fresh clone builds the same files from the seed."""
     built = []
     for conn in all_connectors().values():
         script = conn.folder / "sample.py"
-        if not script.exists() or (not force and any(conn.path("data", "data").glob("*.csv"))):
+        data = conn.path("data", "data")
+        if not script.exists() or (not force and all((data / f"{d}.csv").exists() for d in conn.datasets)):
             continue
         spec = importlib.util.spec_from_file_location(f"sample_{conn.name}", script)
         module = importlib.util.module_from_spec(spec)
