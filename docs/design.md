@@ -793,9 +793,13 @@ cell by cell in VS Code / Spyder / Jupyter). The analysis comes first as plain c
   headings; failed or rejected attempts as comments. `read_range` is included when a step uses it.
 - Then one "support code" cell (result normalising, fingerprints, answer rebuilding), the answers and the check.
 - Each answer as a template: numbers are bound to the result cell they came from (step ref, row by its text
-  columns, column) and recomputed; a changed number shows as `2,017 [was 1,917]`; untraced numbers stay literal.
+  columns, an empty cell counting as "", column), or else to their position in the step's `notes` (totals the
+  code printed there), and recomputed; a changed number shows as `2,017 [was 1,917]`; untraced numbers (dates,
+  counts, run IDs, the user's own) stay literal.
 - A check of each step against what the agent saw (rows, column sums, digest): `MATCH` / `DIFF: …`; exit code 1
-  on any difference. It re-queries the live lake; it does not ship data.
+  on any difference. It re-queries the live lake; it does not ship data. Known limit: when changed data breaks
+  an approved step's code (e.g. a new breach with no earlier date), the script stops at that step with its
+  error, before the check.
 
 ---
 

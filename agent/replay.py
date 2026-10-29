@@ -30,6 +30,12 @@ from .sqlfmt import format_sql
 # Helpers shared by the export (to fingerprint what the agent saw) and the script (to check the replay): one
 # source, embedded verbatim in the script and executed here, so both sides compute the same digest.
 RUNTIME = r'''
+def note_numbers(text):
+    """The numbers in a step's notes, in order: totals the code printed there (e.g. "USED 237790 245463")."""
+    import re
+    return [float(t.replace(",", "")) for t in re.findall(r"-?\d+(?:,\d{3})*(?:\.\d+)?", str(text or ""))]
+
+
 def plain(v):
     """numpy scalars and timestamps as plain Python values, as run_python's JSON output has them."""
     if hasattr(v, "isoformat"):
@@ -55,6 +61,11 @@ def to_result(result):
     if isinstance(result, (list, tuple)):
         return [plain(v) for v in result]
     return plain(result)
+
+
+def as_text(v):
+    """A cell as the text that identifies its row; a missing value is "" however it was stored (NaN, None, NA)."""
+    return "" if v is None or (not isinstance(v, str) and pd.isna(v)) else str(plain(v))
 
 
 def fingerprint(value):
@@ -93,9 +104,10 @@ def compare(expected, actual):
 '''
 _runtime: dict = {"pd": pd}
 exec(RUNTIME, _runtime)                    # noqa: S102 - our own constant code, shared with the script
-fingerprint, to_result = _runtime["fingerprint"], _runtime["to_result"]
+fingerprint, to_result, as_text = _runtime["fingerprint"], _runtime["to_result"], _runtime["as_text"]
+note_numbers = _runtime["note_numbers"]
 
-_NOT_DATA = re.compile(r"\[(?:ref|doc):[^\]]*\]|\b\d{4}-\d{2}-\d{2}\b|\b\d{4}Q[1-4]\b|(?m:^\s*\d+[.)]\s)|\b\d{8}\b")
+_NOT_DATA = re.compile(r"\[(?:ref|doc):[^\]]*\]|\b\d{4}-\d{2}-\d{2}\b|\b\d{4}Q[1-4]\b|(?m:^\s*\d+[.)]\s)|\b\d{8}(?:-\d{6}(?:-\w+)?)?\b")
 _NUMBER = re.compile(r"\+?(?<![\w.])-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|\+?(?<![\w.])-?\d+(?:\.\d+)?")
 _REF = re.compile(r"\[ref:\s*([^\]]+)\]")
 
@@ -159,6 +171,13 @@ def agent_result(state: dict, ref: str):
     return to_result(out["value"])
 
 
+def agent_notes(state: dict, ref: str) -> str:
+    """The notes run_python returned with its result (the code's own totals and remarks), as the agent saw them."""
+    if not ref.startswith("run_python"):
+        return ""
+    return str(json.loads((run_dir(state) / "outputs" / f"{ref}.txt").read_text()).get("notes") or "")
+
+
 def _columns(head: str) -> list[str]:
     m = re.search(r"columns=(\[.*?\])", head)
     return json.loads(m.group(1).replace("'", '"')) if m else []
@@ -181,9 +200,10 @@ def _saved_path(state: dict, item: dict) -> str | None:
 
 # ---------------------------------------------------------------- answer → template
 
-def bind_numbers(text: str, results: dict) -> tuple[str, list[dict], list[str]]:
-    """Replace each traceable number in an answer with {nK}, bound to the result cell it came from.
-    Cells of refs cited in the same paragraph are tried first, then the rest of the answer's refs, then any step.
+def bind_numbers(text: str, results: dict, notes: dict | None = None) -> tuple[str, list[dict], list[str]]:
+    """Replace each traceable number in an answer with {nK}, bound to the result cell it came from, or else to its
+    place in the step's notes (a total the code printed there). Cells of refs cited in the same paragraph are tried
+    first, then the rest of the answer's refs, then any step.
     Returns (template, bindings, numbers left as written)."""
     skip = [m.span() for m in _NOT_DATA.finditer(text)]
     cited_all = [r.strip() for m in _REF.finditer(text) for r in m.group(1).split(",")]
@@ -203,7 +223,7 @@ def bind_numbers(text: str, results: dict) -> tuple[str, list[dict], list[str]]:
         para = next((p for a, b, p in paragraphs if a <= start < b), text)
         near = [r.strip() for mm in _REF.finditer(para) for r in mm.group(1).split(",")]
         order = list(dict.fromkeys([r for r in near + cited_all + list(results) if r in results]))
-        found = _find_cell(value, decimals, order, results)
+        found = _find_cell(value, decimals, order, results) or _find_note(value, decimals, order, notes or {})
         if not found:
             literal.append(token)
             continue
@@ -215,6 +235,16 @@ def bind_numbers(text: str, results: dict) -> tuple[str, list[dict], list[str]]:
         last = end
     out.append(text[last:].replace("{", "{{").replace("}", "}}"))
     return "".join(out), bindings, literal
+
+
+def _find_note(value: float, decimals: int, refs: list[str], notes: dict) -> dict | None:
+    for use_abs in (False, True):
+        for ref in refs:
+            for i, n in enumerate(note_numbers(notes.get(ref, ""))):
+                v = abs(n) if use_abs else n
+                if abs(round(v, decimals) - value) < 1e-9:
+                    return {"ref": ref, "note": i, "abs": use_abs, "orig": n}
+    return None
 
 
 def _find_cell(value: float, decimals: int, refs: list[str], results: dict) -> dict | None:
@@ -234,9 +264,9 @@ def _cells(res):
     """(location, value) for every cell; a table row is located by its text columns (stable under re-sorting)."""
     if isinstance(res, pd.DataFrame):
         keys = [c for c in res.columns if not pd.api.types.is_numeric_dtype(res[c])]
-        unique = bool(keys) and not res[keys].astype(str).duplicated().any()
+        unique = bool(keys) and not res[keys].map(as_text).duplicated().any()
         for pos, (_, row) in enumerate(res.iterrows()):
-            where = {"key": {k: str(row[k]) for k in keys}} if unique else {"pos": pos}
+            where = {"key": {k: as_text(row[k]) for k in keys}} if unique else {"pos": pos}
             for col in res.columns:
                 yield {**where, "col": str(col)}, row[col]
     elif isinstance(res, dict):
@@ -253,7 +283,7 @@ def _cells(res):
 
 def build_script(state: dict) -> str:
     items = collect_steps(state)
-    results, expected, saved, truncated = {}, {}, {}, {}
+    results, expected, saved, truncated, notes = {}, {}, {}, {}, {}
     for it in items:
         if it["kind"] == "export_query":            # the agent saw only a preview: the check uses the file itself
             saved[it["ref"]] = _saved_path(state, it)
@@ -261,6 +291,8 @@ def build_script(state: dict) -> str:
             if file.is_file():
                 results[it["ref"]] = pd.read_csv(file)
                 expected[it["ref"]] = fingerprint(results[it["ref"]])
+        if it["kind"] == "run_python":
+            notes[it["ref"]] = agent_notes(state, it["ref"])
         if it["kind"] in ("sql_query", "run_python"):
             results[it["ref"]] = agent_result(state, it["ref"])
             expected[it["ref"]] = fingerprint(results[it["ref"]])
@@ -300,7 +332,7 @@ def build_script(state: dict) -> str:
             cells.append(_python_cell(step_no, it, saved[it["ref"]],
                                       _name(saved[it["ref"]] or it["input"].get("save_as", "analysis"), names)))
         elif it["kind"] == "final":
-            template, bindings, literal = bind_numbers(it["text"], results)
+            template, bindings, literal = bind_numbers(it["text"], results, notes)
             answers.append(_summary_cell(it["task"], template, bindings, literal))
     if not step_no:
         cells.append("# %% Nothing to replay\n# This conversation read no data and ran no analysis code.")
@@ -440,7 +472,8 @@ def keep(path, df):
         df.to_csv(WORK / path, index=False, float_format="%.10g")
 
 
-R = {{}}          # result of every step, by the ref the answers cite ([ref: sql_query-3] -> R["sql_query-3"])''' \
+R = {{}}          # result of every step, by the ref the answers cite ([ref: sql_query-3] -> R["sql_query-3"])
+NOTES = {{}}      # the notes each analysis step returned (totals it printed there)''' \
         + (_READ_RANGE if uses_range else "")
 
 
@@ -490,6 +523,7 @@ def _python_cell(n: int, it: dict, path: str | None, var: str = "analysis") -> s
             f"{var} = result\n"
             f"keep({path!r}, {var})\n"
             f'R["{ref}"] = {var}\n'
+            f'NOTES["{ref}"] = notes\n'
             f"{var}")
 
 
@@ -511,9 +545,11 @@ def cell(b):
     """The replayed value at the place the agent's number came from (None if it no longer exists)."""
     res = R.get(b["ref"])
     try:
+        if "note" in b:
+            return note_numbers(NOTES.get(b["ref"]))[b["note"]]
         if isinstance(res, pd.DataFrame):
             if "key" in b:
-                rows = res[np.logical_and.reduce([res[k].astype(str) == v for k, v in b["key"].items()])]
+                rows = res[np.logical_and.reduce([res[k].map(as_text) == v for k, v in b["key"].items()])]
                 value = rows[b["col"]].iloc[0]
             else:
                 value = res[b["col"]].iloc[b["pos"]]

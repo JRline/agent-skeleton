@@ -148,6 +148,11 @@ from the connector's optional `sample.py` (git-ignored `data/`, never inside `sa
   `sandbox/outputs/<run>/`, past the `MAX_SQL_ROWS` analysis cap, up to `EXPORT_MAX_ROWS` (5,000,000); the model
   sees only the row count and first rows. The file is always attached to the answer.
   The `api` backend is now called `chatgpt`. 300 unit tests pass.
+- Replay check (2026-10-29): full golden eval on Haiku scored 0.91 (15 tasks). All 15 replay scripts run, every
+  step MATCHes, and every number in the answers is traced (notes totals included); against restated data the
+  affected tasks report DIFF and `[was …]`. Fixed: exports, empty-cell row keys, notes totals, run IDs, sign-in.
+  Open: the replay uses one lake for all queries; changed data can crash an approved step before the check.
+  303 unit tests pass.
 
 ## Next tasks, in order
 1. Pin `requirements.txt` to production's exact Python and package versions (ask the owner). The grid number

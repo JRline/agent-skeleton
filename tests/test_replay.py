@@ -112,6 +112,30 @@ class BindNumbers(TempDirs):
         self.assertTrue(bindings[2]["abs"])                                         # "fell by 20" is -20
         self.assertEqual(literal, ["250"])
 
+    def test_a_row_with_an_empty_text_cell_is_found_again(self):
+        """The agent's result came from JSON (None), the replay's from pandas (NaN): both are the same empty cell."""
+        seen = pd.DataFrame({"book": ["SME", "Loans"], "binding": [None, "DAILY"], "limit": [550.0, 1120.0]})
+        _, bindings, _ = replay.bind_numbers("SME limit 550 [ref: run_python-1]", {"run_python-1": seen})
+        self.assertEqual(bindings[0]["key"], {"book": "SME", "binding": ""})
+        script = {"R": {"run_python-1": pd.DataFrame({"book": ["SME", "Loans"], "binding": [float("nan"), "DAILY"],
+                                                      "limit": [550.0, 1120.0]})}, "pd": pd, "np": __import__("numpy")}
+        exec(replay.RUNTIME + replay._FILL, script)
+        self.assertEqual(script["cell"](bindings[0]), 550.0)
+
+    def test_totals_in_the_notes_are_traced_by_position(self):
+        """Code often prints a total in its notes rather than the result table: the replay recomputes it too."""
+        table = pd.DataFrame({"division": ["A", "B"], "rwa": [100.0, 200.0]})
+        notes = {"run_python-1": "Totals: before 250 after 300 (+20.00%)"}
+        text = "Total RWA 300, up 20.00% [ref: run_python-1]; saved in work/20261029-093623-a720/t.csv."
+        template, bindings, literal = replay.bind_numbers(text, {"run_python-1": table}, notes)
+        self.assertEqual([b.get("note") for b in bindings], [1, 2])
+        self.assertEqual(literal, [])                                         # the run id is not a number
+        script = {"R": {}, "NOTES": {"run_python-1": "Totals: before 260 after 312 (+20.00%)"}, "pd": pd,
+                  "np": __import__("numpy")}
+        exec(replay.RUNTIME + replay._FILL, script)
+        self.assertEqual(script["fill"](template, bindings).split(";")[0],
+                         "Total RWA 312 [was 300], up 20.00% [ref: run_python-1]")
+
     def test_braces_in_answers_survive_the_template(self):
         template, _, _ = replay.bind_numbers("Use {x} as is.", {})
         self.assertEqual(template.format(), "Use {x} as is.")
