@@ -68,13 +68,15 @@ class Replay(TempDirs):
         compile(text, "analysis.py", "exec")
         from agent.sqlfmt import format_sql
         self.assertIn(format_sql(SQL), text)                                       # the query, one clause per line
-        self.assertIn("\np['change'] = p['after'] - p['before']\n", text)        # approved code, unchanged, top level
-        self.assertIn("two = run_sql(SQL)", text)                                   # named after its saved table
-        self.assertLess(text.index("two = run_sql(SQL)"), text.index("# %% Support code"))   # analysis first
+        self.assertIn("\n    p['change'] = p['after'] - p['before']\n", text)    # approved code, in its step guard
+        self.assertIn("two = run_sql(SQL, 'sample_lake')", text)                    # named after its saved table
+        self.assertLess(text.index("two = run_sql(SQL"), text.index("# %% Support code"))    # analysis first
         self.assertIn("# %% Not replayed: run_python attempt", text)               # the failed attempt
         self.assertIn("#     result = missing_name", text.replace("# result", "#     result"))
         self.assertLess(text.index("# %% Step 1 · data extraction"), text.index("# %% Step 2 · analysis"))
-        self.assertIn("# %% Check", text)
+        self.assertIn("# %% Checks", text)
+        self.assertEqual(text.count("compare("), 2)                    # defined in support, used only in Checks
+        self.assertGreater(text.index("compare(exp, R[ref])"), text.index("# %% Checks"))
 
     def test_replay_matches_and_rebuilds_the_answer(self):
         out = self.run_script(replay.export(self.state), self.serve_lake())
@@ -98,6 +100,23 @@ class Replay(TempDirs):
         self.assertIn("2 step(s) differ", out.stdout)
         self.assertIn("rose by 539 [was 439] to 70,077 [was 69,977]", out.stdout)
 
+    def test_a_step_that_fails_on_changed_data_is_reported_and_the_script_goes_on(self):
+        """E.g. a new limit breach the approved code was not written for: the steps run on, the Checks cell says
+        which step failed, and the answer marks the numbers that came from it."""
+        path = replay.export(self.state)
+        lake = self.copy_lake() / "usage_limits.csv"
+        df = pd.read_csv(lake)
+        df[df.division != "Global Markets"].to_csv(lake, index=False)          # the row the code expects is gone
+        text = path.read_text()
+        path.write_text(text.replace("p.columns = ['book', 'before', 'after']",
+                                     "p.columns = ['book', 'before', 'after']\n    p.loc[p.book == 'Global Markets', 'before'].iloc[0]"))
+        out = self.run_script(path, self.serve_lake())
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("IndexError", out.stderr)                                    # the traceback, where it ran
+        self.assertRegex(out.stdout, r"sql_query-\d+\s+DIFF")                       # earlier steps still checked
+        self.assertRegex(out.stdout, r"run_python-\d+\s+FAILED: IndexError")
+        self.assertIn("[step run_python-", out.stdout)                             # the answer is still rebuilt
+
 
 class BindNumbers(TempDirs):
     def test_numbers_bind_to_named_rows_and_the_rest_stay_literal(self):
@@ -118,7 +137,8 @@ class BindNumbers(TempDirs):
         _, bindings, _ = replay.bind_numbers("SME limit 550 [ref: run_python-1]", {"run_python-1": seen})
         self.assertEqual(bindings[0]["key"], {"book": "SME", "binding": ""})
         script = {"R": {"run_python-1": pd.DataFrame({"book": ["SME", "Loans"], "binding": [float("nan"), "DAILY"],
-                                                      "limit": [550.0, 1120.0]})}, "pd": pd, "np": __import__("numpy")}
+                                                      "limit": [550.0, 1120.0]})}, "FAILED": {}, "pd": pd,
+                  "np": __import__("numpy")}
         exec(replay.RUNTIME + replay._FILL, script)
         self.assertEqual(script["cell"](bindings[0]), 550.0)
 
@@ -130,7 +150,7 @@ class BindNumbers(TempDirs):
         template, bindings, literal = replay.bind_numbers(text, {"run_python-1": table}, notes)
         self.assertEqual([b.get("note") for b in bindings], [1, 2])
         self.assertEqual(literal, [])                                         # the run id is not a number
-        script = {"R": {}, "NOTES": {"run_python-1": "Totals: before 260 after 312 (+20.00%)"}, "pd": pd,
+        script = {"R": {}, "FAILED": {}, "NOTES": {"run_python-1": "Totals: before 260 after 312 (+20.00%)"}, "pd": pd,
                   "np": __import__("numpy")}
         exec(replay.RUNTIME + replay._FILL, script)
         self.assertEqual(script["fill"](template, bindings).split(";")[0],
@@ -178,7 +198,7 @@ class ExportReplay(TempDirs):
                                     j(thought="t", final="The export is ready [ref: export_query-1].")]})
         state = run("Export RWA rows", m, approve=lambda e: True, toolkits=["datalake"])
         text = replay.build_script(state)
-        self.assertIn("data export to a file for the user (export_query-1)", text)
+        self.assertIn("data export from sample_lake to a file for the user (export_query-1)", text)
         from agent import connectors
         srv = server.serve(0, connectors.enabled()["sample_lake"].path("data"), quiet=True,
                            users={"analyst": "test-pass"})
@@ -191,3 +211,62 @@ class ExportReplay(TempDirs):
                              text=True, env=env, timeout=60)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertRegex(out.stdout, r"export_query-1\s+MATCH")
+
+
+class TwoConnectors(TempDirs):
+    """Each query goes back to the connector it ran on, so a conversation over two data sources replays."""
+    def setUp(self):
+        super().setUp()
+        import shutil
+        from pathlib import Path
+        ext = Path(self._tmp) / "extensions"
+        shutil.copytree(config.connectors_dir() / "sample_lake", ext / "connectors" / "sample_lake",
+                        ignore=shutil.ignore_patterns("data"))
+        fx = ext / "connectors" / "fx_lake"
+        (fx / "datasets").mkdir(parents=True)
+        (fx / "data").mkdir()
+        (fx / "connector.md").write_text("---\nname: fx_lake\nkind: sqlite\ndescription: Synthetic FX rates.\n"
+                                        "data: data\n---\nAll data is synthetic.\n")
+        (fx / "datasets" / "fx_rates.md").write_text("---\nname: fx_rates\ndescription: Synthetic daily FX rates.\n"
+                                                    "---\nColumns: as_of_date, currency, rate.\n")
+        pd.DataFrame({"as_of_date": ["2026-03-26"] * 2, "currency": ["USD", "EUR"],
+                      "rate": [151.25, 163.5]}).to_csv(fx / "data" / "fx_rates.csv", index=False)
+        self._saved_ext = config.EXTENSIONS_DIR
+        config.EXTENSIONS_DIR = ext
+        from tests.helpers import LAKE
+        from agent import connectors
+        connectors.OVERRIDES["sample_lake"] = {"data": str(LAKE)}
+        self.fx_data = fx / "data"
+
+    def tearDown(self):
+        config.EXTENSIONS_DIR = self._saved_ext
+        super().tearDown()
+
+    def test_each_query_replays_on_its_own_source(self):
+        fx_sql = "SELECT currency, rate FROM fx_rates WHERE as_of_date = '2026-03-26'"
+        m = FakeModel({"planner": [PLAN], "reviewer": [OK], "summariser": ["- s"] * 5,
+                       "executor": [j(thought="t", tool="sql_query", input={"sql": SQL, "save_as": "two"}),
+                                    j(thought="t", tool="sql_query", input={"sql": fx_sql, "save_as": "fx"}),
+                                    j(thought="t", final="USD is 151.25 [ref: sql_query-2].")]})
+        state = run("RWA and FX", m, approve=lambda e: True, toolkits=["datalake"])
+        self.assertEqual(state["status"], "finished")
+        text = replay.build_script(state)
+        self.assertIn("two = run_sql(SQL, 'sample_lake')", text)
+        self.assertIn("fx = run_sql(SQL, 'fx_lake')", text)
+        self.assertIn("'fx_lake': {'kind': 'mock'", text)
+        from agent import connectors
+        urls = {}
+        for name, data in (("SAMPLE_LAKE", connectors.enabled()["sample_lake"].path("data")), ("FX_LAKE", self.fx_data)):
+            srv = server.serve(0, data, quiet=True)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            self.addCleanup(srv.server_close)
+            self.addCleanup(srv.shutdown)
+            urls[f"ANALYSIS_{name}_URL"] = f"http://127.0.0.1:{srv.server_address[1]}"
+        env = {**os.environ, **urls, "ANALYSIS_LAKE": "mock", "ANALYSIS_INPUTS": str(config.inputs_dir())}
+        env.pop("MOCK_LAKE_URL", None)
+        out = subprocess.run([sys.executable, str(replay.export(state))], capture_output=True, text=True, env=env,
+                             timeout=60)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertRegex(out.stdout, r"sql_query-1\s+MATCH")
+        self.assertRegex(out.stdout, r"sql_query-2\s+MATCH")
+        self.assertIn("USD is 151.25", out.stdout)

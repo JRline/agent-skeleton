@@ -781,25 +781,33 @@ state as well. This is enough to replay a run, debug failures, and evidence how 
 **Replay script** (`replay.py`; the "analysis script (.py)" download, or `cli.py --export-script RUN_ID`),
 assembled by the harness from what ran, never by the model. Plain Python with `# %%` cells (runs end to end, or
 cell by cell in VS Code / Spyder / Jupyter). The analysis comes first as plain code; support code comes after:
-- Setup: `run_sql` for the production lake over ODBC (`ANALYSIS_LAKE=odbc`, connection string without the sign-in
-  in `LAKE_ODBC`, user ID in `ANALYSIS_USER`) or the mock lake server (`ANALYSIS_LAKE=mock`; with `ANALYSIS_USER`
-  it signs in); the password is asked once per run and never stored. A result the server cut at its own row limit
-  is an error, not a short table. Inputs from `ANALYSIS_INPUTS`; steps run in a scratch folder with their
+- Setup: `SOURCES`, one entry per connector the queries used (each query is sent back to the connector that holds
+  its datasets: `run_sql(SQL, "sample_lake")`). Kind `odbc` (connection string without the sign-in in the variable
+  the connector's `connection_env` names, default `LAKE_ODBC`; user ID in `ANALYSIS_USER`) or `mock` (the mock lake
+  server at the source's `url`, else `MOCK_LAKE_URL`). Any setting can be overridden with
+  `ANALYSIS_<SOURCE>_<SETTING>` (e.g. `ANALYSIS_SAMPLE_LAKE_URL`); `ANALYSIS_LAKE=mock` sends every query to the
+  mock server. The password is asked once per source and never stored. A result the server cut at its own row
+  limit is an error, not a short table. Inputs from `ANALYSIS_INPUTS`; steps run in a scratch folder with their
   original paths.
 - Every read of the user's files, every successful `sql_query` and `export_query` (the export is written where the
-  agent wrote it and checked against that file) and every approved `run_python` code unchanged,
-  in order, at top level, each with the reviewer's `explain` as a comment and its result in a variable named after
-  its saved table or file (e.g. `rwa_by_division = run_sql(SQL)`); each instruction and the user's answers as
-  headings; failed or rejected attempts as comments. `read_range` is included when a step uses it.
-- Then one "support code" cell (result normalising, fingerprints, answer rebuilding), the answers and the check.
+  agent wrote it and checked against that file) and every approved `run_python` code unchanged (indented one
+  level), in order, each inside `with step("<ref>"):` with the reviewer's `explain` as a comment and its result in
+  a variable named after its saved table or file (e.g. `rwa_by_division = run_sql(SQL, "sample_lake")`); each
+  instruction and the user's answers as headings; failed or rejected attempts as comments. `read_range` is
+  included when a step uses it.
+- The steps hold no checks. A step that stops with an error (e.g. approved code meeting a new limit breach it was
+  not written for) has its traceback printed and is recorded in `FAILED`; the script goes on, and later steps that
+  need its table fail the same way.
+- Then one "support code" cell (result normalising, fingerprints, answer rebuilding), the answers, and last the
+  one Checks cell.
 - Each answer as a template: numbers are bound to the result cell they came from (step ref, row by its text
   columns, an empty cell counting as "", column), or else to their position in the step's `notes` (totals the
-  code printed there), and recomputed; a changed number shows as `2,017 [was 1,917]`; untraced numbers (dates,
-  counts, run IDs, the user's own) stay literal.
-- A check of each step against what the agent saw (rows, column sums, digest): `MATCH` / `DIFF: …`; exit code 1
-  on any difference. It re-queries the live lake; it does not ship data. Known limit: when changed data breaks
-  an approved step's code (e.g. a new breach with no earlier date), the script stops at that step with its
-  error, before the check.
+  code printed there), and recomputed; a changed number shows as `2,017 [was 1,917]`, one from a failed step as
+  `1,917 [step run_python-5 failed]`; untraced numbers (dates, counts, run IDs, the user's own) stay literal.
+- The Checks cell holds every check, with a comment saying it changes nothing and may be skipped: each step
+  against what the agent saw (rows, column sums, digest) as `MATCH`, `DIFF: …` or `FAILED: <error>`; exit code 1
+  on any of them. It re-queries the live sources; it does not ship data. The connector of a query is found from
+  its datasets when the script is exported; a dataset no longer configured falls back to the first connector.
 
 ---
 

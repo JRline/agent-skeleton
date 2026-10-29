@@ -114,17 +114,22 @@ How a session works, the tools and skills, the data lake and attachments, and th
 - **Analysis script**: one file that replays the whole conversation, built from what actually ran (not written by
   the model). It has `# %%` cells, so `python <file>` runs it end to end and VS Code, Spyder or Jupyter open it
   as cells. The analysis comes first, as plain code; the support code for the checks comes after it:
-  - **Setup**: `run_sql` for the internal lake server (`ANALYSIS_LAKE=odbc`, connection string in `LAKE_ODBC`,
-    your user ID in `ANALYSIS_USER`; the password is asked once) or the mock lake server (`ANALYSIS_LAKE=mock`);
-    input files from `ANALYSIS_INPUTS`.
+  - **Setup**: `SOURCES`, one entry per data source (connector) the queries used; each query goes back to its
+    own source. A source is a server over ODBC (connection string in `LAKE_ODBC`, or the variable its connector
+    names; your user ID in `ANALYSIS_USER`; the password is asked once per source) or the mock lake server.
+    Change a setting in the file or with `ANALYSIS_<SOURCE>_<SETTING>` (e.g. `ANALYSIS_SAMPLE_LAKE_URL`);
+    `ANALYSIS_LAKE=mock` sends every query to the mock server. Input files from `ANALYSIS_INPUTS`.
   - **Steps**: every read of your files, every successful `sql_query` and `export_query` and every approved
     `run_python` code, unchanged and in order, each with the reviewer's plain explanation as a comment and its result in a named
-    variable (e.g. `rwa_by_division = run_sql(SQL)`); each instruction and your answers to the agent's questions
-    as headings. Failed or rejected attempts are kept as comments.
+    variable (e.g. `rwa_by_division = run_sql(SQL, "sample_lake")`); each instruction and your answers to the
+    agent's questions as headings. Failed or rejected attempts are kept as comments. Each step runs inside
+    `with step(...)`: if it stops with an error (say the approved code meets a new limit breach it was not
+    written for), the error is printed and the script carries on with the next step.
   - **Answers**: each answer as a template; every number traced to a result cell (by step, row name and column)
     is recomputed, and a changed number shows as `2,017 [was 1,917]`. Untraced numbers stay as written.
-  - **Check**: each step against what the agent saw (shape, column totals, digest): `MATCH` or `DIFF: …`.
-    The exit code is 1 when anything differs, e.g. the lake data was restated.
+  - **Checks** (the last cell, and the only place anything is checked; skip it to just use the results): each
+    step against what the agent saw (shape, column totals, digest): `MATCH`, `DIFF: …` or `FAILED: <error>`.
+    The exit code is 1 when anything differs or failed, e.g. the lake data was restated.
 - **Attachments** (any file): the paperclip in the message box, or CLI `--input`. They become input files of the
   conversation, shown as 📎 file names under the request they came with; attached text files can also be searched
   with `search_docs`.

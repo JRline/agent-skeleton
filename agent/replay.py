@@ -6,8 +6,10 @@ check of each step against what the agent saw (MATCH / DIFF) and each answer as 
 filled from the replayed results. Failed or rejected attempts appear as comments, so the audit trail is complete.
 
 The file is plain Python with `# %%` cells: `python analysis_<run>.py` runs it end to end, and VS Code, Spyder or
-Jupyter open it as cells. It needs pandas plus a connection to the lake: the internal lake server over ODBC in
-production, or the mock lake server when testing. It re-queries the live lake; it does not ship the data.
+Jupyter open it as cells. It needs pandas plus a connection to each data source the queries used (one per
+connector, each query sent to its own): a server over ODBC in production, or the mock lake server when testing.
+It re-queries the live sources; it does not ship the data. A step that stops with an error is recorded and the
+script carries on; all checks sit in one Checks cell at the end, which the user may skip.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ import json
 import numbers
 import re
 import textwrap
+import tokenize
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
@@ -300,11 +303,8 @@ def build_script(state: dict) -> str:
             if it["kind"] == "sql_query":
                 truncated[it["ref"]] = _truncated(state, it["ref"])
     models = sorted({e.get("model") for e in read_log(state) if e.get("kind") == "model" and e.get("model")})
-    from . import connectors
-    kinds = {c.kind for c in connectors.enabled().values()}
-    lake = "mock" if kinds <= {"sqlite", "mock"} else "odbc"
     title = state.get("title") or state["run_id"]
-    cells = [_header(state, title, models, items), _setup(lake, state, items)]
+    cells = [_header(state, title, models, items), _setup(_sources(items), state, items)]
     answers, names, step_no = [], {}, 0
     for it in items:
         if it["kind"] == "task":
@@ -338,6 +338,43 @@ def build_script(state: dict) -> str:
         cells.append("# %% Nothing to replay\n# This conversation read no data and ran no analysis code.")
     cells += [_SUPPORT] + answers + [_check_cell(expected)]
     return "\n\n\n".join(cells) + "\n"
+
+
+def _sources(items: list[dict]) -> dict[str, dict]:
+    """The data source of each query (the connector holding its datasets, as when it ran; stored on the item) and the
+    script's settings for each source used. A connector no longer configured falls back to the first enabled one."""
+    from . import connectors
+    from .datalake import LakeError, connector_for
+    enabled = connectors.enabled()
+    out = {}
+    for it in items:
+        if it["kind"] not in ("sql_query", "export_query"):
+            continue
+        try:
+            name = connector_for(it["input"].get("sql", ""))
+        except LakeError:
+            name = next(iter(enabled), "lake")
+        it["source"] = name
+        conn = enabled.get(name)
+        kind = conn.kind if conn else "odbc"
+        out[name] = {"kind": "mock" if kind in ("mock", "sqlite") else "odbc",   # local CSVs are served by the mock server
+                     "url": conn.setting("url") if conn and kind == "mock" else "",
+                     "odbc_env": conn.setting("connection_env", "LAKE_ODBC") if conn else "LAKE_ODBC",
+                     "login": bool(conn and conn.needs_login)}
+    return out
+
+
+def _indent(code: str) -> str:
+    """Code one level in, for its `with step(...)` block; lines inside a multi-line string keep their text."""
+    inside: set[int] = set()
+    try:
+        for tok in tokenize.generate_tokens(StringIO(code).readline):
+            if tok.type == tokenize.STRING and tok.start[0] != tok.end[0]:
+                inside.update(range(tok.start[0] + 1, tok.end[0] + 1))
+    except (tokenize.TokenError, SyntaxError, IndentationError):
+        pass
+    return "\n".join("    " + line if line.strip() and i not in inside else line
+                     for i, line in enumerate(code.split("\n"), 1))
 
 
 def _one_line(text: str) -> str:
@@ -382,10 +419,15 @@ def read_range(path, sheet, cell_range, header_rows=1):
     return pd.DataFrame(body, columns=names)'''
 
 
-def _setup(lake: str, state: dict, items: list | None = None) -> str:
+def _setup(sources: dict, state: dict, items: list | None = None) -> str:
     inputs = str(config.inputs_dir().resolve())
     uses_range = any("read_range(" in str(it.get("input", {}).get("code", "")) for it in items or [])
-    return f'''# %% Setup: data lake connection and working folder
+    table = "".join(f"    {name!r}: {spec!r},\n" for name, spec in sources.items())
+    return (_SETUP.replace("__SOURCES__", table).replace("__INPUTS__", repr(inputs))
+            .replace("__RUN__", state["run_id"]) + (_READ_RANGE if uses_range else ""))
+
+
+_SETUP = '''# %% Setup: data sources and working folder
 import json
 import math
 import os
@@ -393,25 +435,45 @@ import shutil
 import statistics
 import sys
 import tempfile
+import traceback
 import urllib.request
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-# Where the data comes from: "odbc" = the server over ODBC (connection string without the sign-in in LAKE_ODBC;
-# your user ID in ANALYSIS_USER, the password is asked), "mock" = the local mock lake server
-# (python scripts/mock_lake_server.py), for testing only.
-LAKE = os.getenv("ANALYSIS_LAKE", "{lake}")
-INPUTS = Path(os.getenv("ANALYSIS_INPUTS", {inputs!r}))   # the user's input files (attachments)
+# The data sources the queries ran on (one per connector); each query names its own: run_sql(SQL, "<source>").
+#   kind "odbc": the server over ODBC; odbc_env names the environment variable holding the connection string
+#                without the sign-in (driver, server, database).
+#   kind "mock": the local mock lake server (python scripts/mock_lake_server.py) at url, for testing only;
+#                an empty url means MOCK_LAKE_URL or http://127.0.0.1:8765.
+#   login:       sign in as yourself: your user ID in ANALYSIS_USER; the password is asked once per source and
+#                never stored.
+# Change a setting here, or with an environment variable ANALYSIS_<SOURCE>_<SETTING> (e.g. ANALYSIS_SAMPLE_LAKE_URL);
+# ANALYSIS_LAKE=mock sends every query to the mock server.
+SOURCES = {
+__SOURCES__}
+INPUTS = Path(os.getenv("ANALYSIS_INPUTS", __INPUTS__)).resolve()   # the user's input files (attachments)
 
 
-def run_sql(sql: str) -> pd.DataFrame:
-    """One read-only SELECT on a data source."""
-    if LAKE == "odbc":
-        import pyodbc                                          # the lake's ODBC driver must be installed
-        conn = pyodbc.connect(f"{{os.environ['LAKE_ODBC']}};UID={{os.environ['ANALYSIS_USER']}};PWD={{_password()}}",
-                              readonly=True, autocommit=True)
+def setting(source, key):
+    value = os.getenv(f"ANALYSIS_{source.upper()}_{key.upper()}")
+    if value is None and key == "kind":
+        value = os.getenv("ANALYSIS_LAKE")
+    if value is None:
+        return SOURCES[source][key]
+    return value.lower() in ("yes", "true", "1") if key == "login" else value
+
+
+def run_sql(sql: str, source: str) -> pd.DataFrame:
+    """One read-only SELECT on one data source."""
+    if setting(source, "kind") == "odbc":
+        import pyodbc                                          # the server's ODBC driver must be installed
+        dsn = os.environ[setting(source, "odbc_env")]
+        if setting(source, "login"):                         # braced values: a ; or = in them cannot break the string
+            user, pwd = (v.replace("}", "}}") for v in (_user(), _password(source)))
+            dsn += f";UID={{{user}}};PWD={{{pwd}}}"
+        conn = pyodbc.connect(dsn, readonly=True, autocommit=True)
         try:
             cur = conn.cursor()
             cur.execute(sql)
@@ -419,33 +481,39 @@ def run_sql(sql: str) -> pd.DataFrame:
                                              columns=[d[0] for d in cur.description])
         finally:
             conn.close()
-    url = os.getenv("MOCK_LAKE_URL", "http://127.0.0.1:8765").rstrip("/") + "/query"
-    req = urllib.request.Request(url, data=json.dumps({{"sql": sql}}).encode(),
-                                 headers={{"Content-Type": "application/json"}})
-    if os.getenv("MOCK_LAKE_TOKEN"):
-        req.add_header("Authorization", f"Bearer {{os.environ['MOCK_LAKE_TOKEN']}}")
-    elif os.getenv("ANALYSIS_USER"):                          # a server that needs your sign-in
+    url = (setting(source, "url") or os.getenv("MOCK_LAKE_URL", "http://127.0.0.1:8765")).rstrip("/") + "/query"
+    req = urllib.request.Request(url, data=json.dumps({"sql": sql}).encode(),
+                                 headers={"Content-Type": "application/json"})
+    if setting(source, "login") or os.getenv("ANALYSIS_USER"):
         from base64 import b64encode
-        token = b64encode(f"{{os.environ['ANALYSIS_USER']}}:{{_password()}}".encode()).decode()
-        req.add_header("Authorization", f"Basic {{token}}")
+        token = b64encode(f"{_user()}:{_password(source)}".encode()).decode()
+        req.add_header("Authorization", f"Basic {token}")
+    elif os.getenv("MOCK_LAKE_TOKEN"):
+        req.add_header("Authorization", f"Bearer {os.environ['MOCK_LAKE_TOKEN']}")
     with urllib.request.urlopen(req, timeout=int(os.getenv("SQL_TIMEOUT_S", "900"))) as resp:
         out = json.loads(resp.read())
     if out.get("truncated"):
-        raise RuntimeError(f"The server returned only its first {{len(out['rows']):,}} rows: the result is incomplete.")
+        raise RuntimeError(f"The server returned only its first {len(out['rows']):,} rows: the result is incomplete.")
     return pd.DataFrame(out["rows"], columns=out["columns"])
 
 
-def _password(cache={{}}):
-    """Asked once per run of the script, never stored."""
+def _user():
+    if not os.getenv("ANALYSIS_USER"):
+        raise RuntimeError("Set ANALYSIS_USER to your user ID to sign in to the data source.")
+    return os.environ["ANALYSIS_USER"]
+
+
+def _password(source, cache={}):
+    """Asked once per source and run of the script, never stored."""
     from getpass import getpass
-    if "pwd" not in cache:
-        cache["pwd"] = getpass(f"Password for {{os.environ['ANALYSIS_USER']}}: ")
-    return cache["pwd"]
+    if source not in cache:
+        cache[source] = getpass(f"Password for {_user()} on {source}: ")
+    return cache[source]
 
 
 # Analysis steps read files by the paths they used in the agent ("inputs/...", "work/<run>/..."), so they run
 # in a scratch folder with the inputs linked in and each step's tables saved where later steps expect them.
-WORK = Path(tempfile.mkdtemp(prefix="replay_{state["run_id"]}_"))
+WORK = Path(tempfile.mkdtemp(prefix="replay___RUN___"))
 for name, target in (("inputs", INPUTS), ("sandbox", WORK)):
     try:
         os.symlink(target, WORK / name, target_is_directory=True)
@@ -472,9 +540,28 @@ def keep(path, df):
         df.to_csv(WORK / path, index=False, float_format="%.10g")
 
 
-R = {{}}          # result of every step, by the ref the answers cite ([ref: sql_query-3] -> R["sql_query-3"])
-NOTES = {{}}      # the notes each analysis step returned (totals it printed there)''' \
-        + (_READ_RANGE if uses_range else "")
+R = {}          # result of every step, by the ref the answers cite ([ref: sql_query-3] -> R["sql_query-3"])
+NOTES = {}      # the notes each analysis step returned (totals it printed there)
+FAILED = {}     # steps that stopped with an error, by ref: reported in the Checks cell at the end
+
+
+class step:
+    """Runs one step. The steps hold no checks: if one stops with an error (e.g. the approved code meets data it
+    was not written for, such as a new limit breach), the error is printed and recorded, and the script carries on
+    with the next step. Steps that need its table then fail too. The Checks cell at the end reports it."""
+    def __init__(self, ref):
+        self.ref = ref
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, kind, error, trace):
+        if not isinstance(error, Exception):
+            return False
+        FAILED[self.ref] = f"{kind.__name__}: {error}"
+        print(f"--- {self.ref} stopped with an error; continuing with the next step:", file=sys.stderr)
+        traceback.print_exception(kind, error, trace, file=sys.stderr)
+        return True'''
 
 
 def _comment(text: str) -> str:
@@ -487,27 +574,32 @@ def _read_cell(n: int, it: dict, var: str) -> str:
     load = (f"pd.read_excel({path!r}, sheet_name=None, header=None)  # every sheet as read, layout and all"
             if excel else f"read_table({path!r})")
     return (f"# %% Step {n} · read your file {path}\n" + _comment(it.get("explain"))
-            + f"{var} = {load}\n{var}")
+            + f'{var} = None\nwith step("{it["ref"]}"):\n    {var} = {load}\n{var}')
 
 
 def _sql_cell(n: int, it: dict, path: str | None, truncated: int | None, var: str = "extract") -> str:
-    ref, sql = it["ref"], it["input"].get("sql", "")
+    ref, sql, source = it["ref"], it["input"].get("sql", ""), it.get("source", "lake")
     cap = f".head({truncated})  # the agent saw the first {truncated} rows" if truncated else ""
-    return (f"# %% Step {n} · data extraction ({ref})\n" + _comment(it.get("explain"))
+    return (f"# %% Step {n} · data extraction from {source} ({ref})\n" + _comment(it.get("explain"))
             + f"SQL = {_literal(format_sql(sql))}\n"
-            f"{var} = run_sql(SQL){cap}\n"
-            f"keep({path!r}, {var})            # later steps read it from this path\n"
-            f'R["{ref}"] = {var}\n'
+            f"{var} = None\n"
+            f'with step("{ref}"):\n'
+            f"    {var} = run_sql(SQL, {source!r}){cap}\n"
+            f"    keep({path!r}, {var})            # later steps read it from this path\n"
+            f'    R["{ref}"] = {var}\n'
             f"{var}")
 
 
 def _export_cell(n: int, it: dict, path: str | None, var: str = "export") -> str:
-    ref, sql = it["ref"], it["input"].get("sql", "")
-    return (f"# %% Step {n} · data export to a file for the user ({ref})\n" + _comment(it.get("explain"))
+    ref, sql, source = it["ref"], it["input"].get("sql", ""), it.get("source", "lake")
+    return (f"# %% Step {n} · data export from {source} to a file for the user ({ref})\n"
+            + _comment(it.get("explain"))
             + f"SQL = {_literal(format_sql(sql))}\n"
-            f"{var} = run_sql(SQL)\n"
-            f"keep({path!r}, {var})            # the exported file, where the agent wrote it\n"
-            f'R["{ref}"] = {var}\n'
+            f"{var} = None\n"
+            f'with step("{ref}"):\n'
+            f"    {var} = run_sql(SQL, {source!r})\n"
+            f"    keep({path!r}, {var})            # the exported file, where the agent wrote it\n"
+            f'    R["{ref}"] = {var}\n'
             f"{var}")
 
 
@@ -517,13 +609,14 @@ def _python_cell(n: int, it: dict, path: str | None, var: str = "analysis") -> s
     tables = inp.get("tables") or {}
     load = "{" + ", ".join(f"{k!r}: read_table({v!r})" for k, v in tables.items()) + "}"
     return (f"# %% Step {n} · analysis ({ref}): the approved code, unchanged\n" + _comment(it.get("explain"))
-            + f"tables = {load}\n"
-            f"result = notes = None\n"
-            f"{code}\n"
-            f"{var} = result\n"
-            f"keep({path!r}, {var})\n"
-            f'R["{ref}"] = {var}\n'
-            f'NOTES["{ref}"] = notes\n'
+            + f"{var} = result = notes = None\n"
+            f'with step("{ref}"):\n'
+            f"    tables = {load}\n"
+            f"{_indent(code)}\n"
+            f"    {var} = result\n"
+            f"    keep({path!r}, {var})\n"
+            f'    R["{ref}"] = {var}\n'
+            f'    NOTES["{ref}"] = notes\n'
             f"{var}")
 
 
@@ -576,7 +669,9 @@ def fill(template, bindings):
     for b in bindings:
         new = cell(b)
         old = fmt(b["orig"], b)
-        if new is None:
+        if b["ref"] in FAILED:
+            values[b["name"]] = f"{old} [step {b['ref']} failed]"
+        elif new is None:
             values[b["name"]] = f"{old} [not found in this run]"
         elif fmt(new, b) != old:
             values[b["name"]] = f"{fmt(new, b)} [was {old}]"
@@ -586,18 +681,25 @@ def fill(template, bindings):
 
 
 def _check_cell(expected: dict) -> str:
-    return (f"# %% Check: each step against what the agent saw\n"
-            f"EXPECTED = {{  # shape, column totals and a digest of each step's result when the agent ran it\n"
+    return ("# %% Checks: each step against what the agent saw\n"
+            "# Every check in this script is here; the steps above only run and record. This cell changes nothing,\n"
+            "# so you can skip it and use the results as they are. MATCH: the step gives what the agent saw.\n"
+            "# DIFF: the data has changed since the analysis, or the step is not reproducible. FAILED: the step\n"
+            "# stopped with an error (its traceback is printed where it ran), e.g. the approved code met data it\n"
+            "# was not written for; later steps that need its table fail too.\n"
+            "EXPECTED = {  # shape, column totals and a digest of each step's result when the agent ran it\n"
             + "".join(f"    {k!r}: {v!r},\n" for k, v in expected.items()) + "}\n"
-            f"diffs = 0\n"
-            f"for ref, exp in EXPECTED.items():\n"
-            f"    verdict = compare(exp, R[ref]) if ref in R else 'NOT RUN'\n"
-            f"    diffs += verdict != 'MATCH'\n"
-            f"    print(f'{{ref:<20}} {{verdict}}')\n"
-            f"print('All steps match what the agent saw.' if not diffs else\n"
-            f"      f'{{diffs}} step(s) differ: the data has changed since the analysis, or a step is not reproducible.')\n"
-            f"if __name__ == '__main__' and 'ipykernel' not in sys.modules:   # exit code for scripts, not notebooks\n"
-            f"    sys.exit(1 if diffs else 0)")
+            "VERDICTS = {ref: f'FAILED: {FAILED[ref]}' if ref in FAILED else compare(exp, R[ref]) if ref in R\n"
+            "            else 'NOT RUN' for ref, exp in EXPECTED.items()}\n"
+            "VERDICTS.update({ref: f'FAILED: {why}' for ref, why in FAILED.items() if ref not in VERDICTS})\n"
+            "for ref, verdict in VERDICTS.items():\n"
+            "    print(f'{ref:<20} {verdict}')\n"
+            "diffs = sum(v != 'MATCH' for v in VERDICTS.values())\n"
+            "print('All steps match what the agent saw.' if not diffs else\n"
+            "      f'{diffs} step(s) differ or failed: the data has changed since the analysis, or a step is not '\n"
+            "      'reproducible.')\n"
+            "if __name__ == '__main__' and 'ipykernel' not in sys.modules:   # exit code for scripts, not notebooks\n"
+            "    sys.exit(1 if diffs else 0)")
 
 
 def _literal(text: str) -> str:

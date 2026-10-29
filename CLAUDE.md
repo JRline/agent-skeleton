@@ -151,8 +151,8 @@ from the connector's optional `sample.py` (git-ignored `data/`, never inside `sa
 - Replay check (2026-10-29): full golden eval on Haiku scored 0.91 (15 tasks). All 15 replay scripts run, every
   step MATCHes, and every number in the answers is traced (notes totals included); against restated data the
   affected tasks report DIFF and `[was …]`. Fixed: exports, empty-cell row keys, notes totals, run IDs, sign-in.
-  Open: the replay uses one lake for all queries; changed data can crash an approved step before the check.
-  303 unit tests pass.
+  Since then: each query replays on its own connector (`SOURCES`), and a step that fails on changed data is
+  recorded and skipped (`with step(ref)`), with every check in one final Checks cell. 305 unit tests pass.
 
 ## Next tasks, in order
 1. Pin `requirements.txt` to production's exact Python and package versions (ask the owner). The grid number
