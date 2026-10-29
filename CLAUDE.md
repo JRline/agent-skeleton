@@ -159,6 +159,9 @@ from the connector's optional `sample.py` (git-ignored `data/`, never inside `sa
   Then: a three-dataset join test; the step budget scales with the plan (3 per plan step, at least 15); old
   dataset descriptions keep filters and columns; a dataset skill is not suggested for datasets it does not cover.
   Live Haiku: the credit reconciliation (12 steps) and the three-dataset join (10 steps) finish. 313 unit tests pass.
+  Golden eval on the production stand-in (session_sim, MODEL_MEMORY=session, Haiku): 0.93 (main: 0.74 on the same
+  backend). Only `rwa_limit_status_now` fails (step cap 8; it ran 4 queries for a one-query skill). A golden task's
+  `max_steps` stays an exact cap in the eval (no plan scaling).
 
 ## Next tasks, in order
 1. Pin `requirements.txt` to production's exact Python and package versions (ask the owner). The grid number

@@ -72,8 +72,9 @@ def shown_answer(state: dict) -> str:
 
 def run_task(task: dict, model) -> dict:
     """One golden task as a fresh conversation; returns checks, score and metrics."""
-    saved = config.MAX_STEPS
-    config.MAX_STEPS = task.get("max_steps", saved)
+    saved = config.MAX_STEPS, config.STEPS_PER_PLAN_STEP
+    if "max_steps" in task:              # the task's own cap is exact (an efficiency target), not scaled by the plan
+        config.MAX_STEPS, config.STEPS_PER_PLAN_STEP = task["max_steps"], 0
     model.new_session()                  # session memory mode: each task starts with fresh instances
     t0 = time.perf_counter()
     try:
@@ -83,7 +84,7 @@ def run_task(task: dict, model) -> dict:
                     ask=lambda e: "Yes, confirmed: go ahead with your proposal.",
                     choose=lambda e: {"toolkits": e["payload"]["toolkits"], "skill": e["payload"].get("skill")})
     finally:
-        config.MAX_STEPS = saved
+        config.MAX_STEPS, config.STEPS_PER_PLAN_STEP = saved
     seconds = time.perf_counter() - t0
     answer = state.get("final") or ""
     shown = shown_answer(state)
