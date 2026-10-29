@@ -46,6 +46,16 @@ class MockLakeServer(TempDirs):
         self.assertTrue(obs["ok"], obs)
         self.assertTrue((config.work_dir("r1") / "n.csv").exists())
 
+    def test_an_export_over_the_server_row_limit_is_refused_not_cut(self):
+        self.start(max_rows=100)
+        ctx = ToolContext(run_id="r1", run_dir=config.RUNS_DIR / "r1")
+        obs = dispatch("export_query", {"sql": f"SELECT location, amount FROM usage_limits WHERE {STD} AND "
+                                               "scenario = 'USED' AND resource = 'RWA'", "name": "x.csv"},
+                       ctx, "export_query-1")
+        self.assertFalse(obs["ok"])
+        self.assertIn("first 100 rows", obs["error"])
+        self.assertFalse((config.outputs_dir("r1") / "x.csv").exists())
+
     def test_the_server_refuses_writes_whatever_the_client_sends(self):
         """The agent's SQL guard is bypassed here on purpose: the server is the read-only account."""
         url = self.start()

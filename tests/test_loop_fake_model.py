@@ -326,6 +326,17 @@ class ReviewerSeesCitedOutputs(LoopCase):
         self.assertIn("Markets,66363", prompt)
 
 
+    def test_an_export_is_shown_with_the_answer_even_if_not_listed(self):
+        from tests.helpers import STD
+        sql = f"SELECT location, amount FROM usage_limits WHERE scenario = 'USED' AND resource = 'RWA' AND {STD}"
+        m = model([tool_call("export_query", sql=sql, name="rwa_rows"),
+                   final("The export is ready [ref: export_query-1].")])
+        state = run("Export the RWA rows", m, approve=lambda e: True)
+        ev = state["events"][-1]["payload"]
+        self.assertEqual(ev["tables"], [f"outputs/{state['run_id']}/rwa_rows.csv"])   # .csv added to the name
+        self.assertEqual(state["results"][0]["path"], ev["tables"][0])
+
+
 class Finisher(LoopCase):
     STUCK = tool_call("read_file", path="work/sample_capital.csv")        # repeated
 

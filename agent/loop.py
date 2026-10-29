@@ -15,6 +15,7 @@ eval read (runs/<id>/state.json: status, plan, facts, the pending approval or qu
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 from datetime import datetime
@@ -201,10 +202,19 @@ def _tool_event(state: dict, m: ToolMessage, call: dict, decision: str | None) -
                                 attempts=call.get("attempts", 1), effort=call.get("effort")))
 
 
+def _exports(messages: list) -> list[str]:
+    """Files export_query wrote for this instruction (since the last user message): an export is always for the
+    user, so its file is shown with the answer even when the model forgets to list it under tables."""
+    start = max((i for i, m in enumerate(messages) if isinstance(m, HumanMessage)), default=-1)
+    found = (re.search(r"saved as (outputs/\S+\.csv) \(exported", str(m.content))
+             for m in messages[start + 1:] if isinstance(m, ToolMessage) and m.name == "export_query")
+    return [f.group(1) for f in found if f]
+
+
 def _finish(state: dict, values: dict) -> dict:
     last_ai = next((m for m in reversed(values["messages"]) if isinstance(m, AIMessage) and not m.tool_calls), None)
     extra = last_ai.additional_kwargs if last_ai else {}
-    tables = _result_tables(state, extra.get("tables"))
+    tables = _result_tables(state, list(extra.get("tables") or []) + _exports(values["messages"]))
     text = values.get("final") or ""
     payload = {"text": text, "thought": extra.get("thought", ""), "tables": [t["path"] for t in tables],
                "table_titles": {t["path"]: t["title"] for t in tables}}

@@ -244,6 +244,8 @@ def _result_tables(state: dict, items) -> list[dict]:
         if not name:
             continue
         path = name if "/" in name else f"work/{state['run_id']}/{name.removesuffix('.csv')}.csv"
+        if "/" not in name and not (config.SANDBOX_DIR / path).is_file():      # a file delivered to the user
+            path = f"outputs/{state['run_id']}/{name}"
         if (config.SANDBOX_DIR / path).is_file() and path not in [t["path"] for t in out]:
             out.append({"path": path, "title": title or Path(path).stem.replace("_", " ").capitalize()})
     return out

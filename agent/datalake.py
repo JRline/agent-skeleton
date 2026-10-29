@@ -139,6 +139,38 @@ class Lake:
             conn.close()
         return pd.DataFrame([tuple(r) for r in rows[:limit]], columns=cols), len(rows) > limit
 
+    def export(self, sql: str, path, max_rows: int | None = None, chunk: int = 10_000) -> tuple[list[str], int]:
+        """Stream one checked query into a CSV file, chunk by chunk, so a large table never sits in memory (or in
+        the prompt). Limited on the server to max_rows + 1; over the limit the partial file is removed and the
+        query refused. Returns (columns, rows written)."""
+        import csv
+        sql = check_select(sql, self.list_datasets())
+        check_required_filters(sql, required_filters())
+        limit = max_rows or config.EXPORT_MAX_ROWS
+        conn = self.connect()
+        written = 0
+        try:
+            cur = conn.cursor()
+            cur.execute(self._limit(sql, limit + 1))
+            cols = [d[0] for d in cur.description]
+            with open(path, "w", newline="") as f:
+                out = csv.writer(f)
+                out.writerow(cols)
+                while rows := cur.fetchmany(chunk):
+                    if written + len(rows) > limit:
+                        raise LakeError(f"The export has more than {limit:,} rows (EXPORT_MAX_ROWS). Filter it "
+                                        "further (dates, entity, slice) or split it into several exports.")
+                    out.writerows(rows)
+                    written += len(rows)
+        except Exception as e:
+            path.unlink(missing_ok=True)                       # never leave a partial file that looks complete
+            if isinstance(e, LakeError):
+                raise
+            raise LakeError(f"Query failed: {credentials.scrub(str(e))}") from None
+        finally:
+            conn.close()
+        return cols, written
+
     def describe(self, dataset: str) -> list[str]:
         """Columns of a dataset: catalogue metadata only (a zero-row query; cached), never data rows."""
         if dataset not in self.list_datasets():

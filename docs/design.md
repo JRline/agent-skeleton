@@ -111,7 +111,7 @@ docs/               # all documentation; gpt_prompts/ for scripts/gpt_pack.py
 runs/               # runtime: one folder per conversation (state.json, log.jsonl, outputs/); checkpoints.sqlite
 sandbox/            # runtime: the only folder tools may read or write
   inputs/           # input files (uploads land here)
-  outputs/<run>/    # files written by write_file / save_table (approval needed)
+  outputs/<run>/    # files written by write_file / save_table / export_query (approval needed)
   work/<run>/       # scratch tables from sql_query and run_python (no approval: not user-facing)
   context/          # user's context documents (definitions, methodology)
 ```
@@ -297,7 +297,7 @@ skill, toolkit or example only adds files under `extensions/` (and tests); it do
   toolkit is not offered again. All of these pauses are LangGraph interrupts, answered with `resolve_pending`.
 
 ### Built-in tools (by toolkit: files = read_file, write_file, save_table; docs = recall, search_docs;
-analysis = run_python; datalake = list_datasets, describe_dataset, sql_query; core = ask_user)
+analysis = run_python; datalake = list_datasets, describe_dataset, sql_query, export_query; core = ask_user)
 
 | Tool | Purpose | Returns | Risky |
 |---|---|---|---|
@@ -308,6 +308,7 @@ analysis = run_python; datalake = list_datasets, describe_dataset, sql_query; co
 | `run_python` | Model-written pandas code for every calculation (see below) | agreed JSON result + work table | **yes** |
 | `list_datasets` / `describe_dataset` | Datasets by connector with meaning, required filters, columns and partitions (catalogue and dataset files; no data rows) | text | no |
 | `sql_query` | One read-only SELECT on datasets of one connector (filtered and aggregated) | preview + saved work table path | **yes**; no when a repeat is answered from its saved result |
+| `export_query` | The rows of one read-only SELECT as a CSV for the user (an extract to download), up to `EXPORT_MAX_ROWS` | row count, columns, first rows + file path in `outputs/<run>/` | **yes** |
 | `ask_user` | Pause and ask the human | the answer | no |
 
 **Arithmetic is done by code, never by the model.** One tool, `run_python`, replaces the per-operation tools of
@@ -401,7 +402,17 @@ allowed at run time only, so pandas date parsing works; the static check still r
   wraps a query that has its own; a connection kind may supply `limit_sql` for its dialect). Columns come from a
   zero-row query; `describe_dataset` returns no data rows.
 - A result over `MAX_SQL_ROWS` is refused, not truncated: nothing is saved and the model is told to filter (WHERE)
-  and aggregate (GROUP BY, SUM/COUNT/AVG) in SQL to the level the goal needs, then run it again.
+  and aggregate (GROUP BY, SUM/COUNT/AVG) in SQL to the level the goal needs, then run it again (or, when the
+  user wants the rows themselves as a file, to use `export_query`).
+- An export (`export_query`, `Lake.export`) is the one way past `MAX_SQL_ROWS`, for a user who wants the data itself,
+  not an analysis. The rows stream from the cursor (`fetchmany` in chunks) straight into a CSV in
+  `outputs/<run>/`, so the table is never held in memory or sent to the model: the model gets the row count, the
+  columns and the first rows. The server is asked for at most `EXPORT_MAX_ROWS` + 1 rows (default 5,000,000);
+  over that, or when the server cuts the result at its own limit, the partial file is removed and the export
+  refused. The same checks as `sql_query` apply (`check_select`, required filters, request review, approval).
+  The file is attached to the answer even if the model does not list it under `tables` (`loop._exports`); a
+  name without `.csv` gets it. The UI shows its first `UI_MAX_GRID_ROWS` rows and offers the
+  download up to `UI_MAX_DOWNLOAD_MB` (a larger file is shown by its path on disk).
 - Required filters are standing background, not errors: each dataset file's `default_filters` (recommended
   values, e.g. `partition_key = 'FY2025' AND … AND version = 'CLOSED' AND method = 'BOOKED'`) and the required filters are
   rendered into the datalake toolkit's guidance (`datalake.dataset_rules`; a toolkit's `guidance` may be a function)

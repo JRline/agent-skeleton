@@ -38,11 +38,23 @@ def _read(path: str, version: tuple) -> tuple[pd.DataFrame, bytes]:
     return pd.read_csv(io.BytesIO(data)), data
 
 
+@st.cache_data(show_spinner=False, max_entries=8)
+def _head(path: str, version: tuple, rows: int) -> pd.DataFrame:
+    return pd.read_csv(path, nrows=rows)
+
+
 def show_table(path, title: str, key: str) -> None:
-    """A result grid (first rows only for big tables) with the full CSV as download."""
-    df, data = _read(str(path), _version(path))
-    st.caption(title)
+    """A result grid (first rows only for big tables) with the full CSV as download. A very large file (an
+    export) is never loaded whole: the grid shows its first rows and the page gives its location on disk."""
     limit = config.UI_MAX_GRID_ROWS
+    st.caption(title)
+    if path.stat().st_size > config.UI_MAX_DOWNLOAD_MB * 1e6:
+        df = _head(str(path), _version(path), limit)
+        st.dataframe(df, hide_index=True, use_container_width=True, column_config=number_columns(df))
+        st.caption(f"Showing the first {limit:,} rows. The file ({path.stat().st_size / 1e6:,.0f} MB) is too large "
+                   f"to download here; it is saved at `{path.resolve()}`.")
+        return
+    df, data = _read(str(path), _version(path))
     st.dataframe(df.head(limit), hide_index=True, use_container_width=True, column_config=number_columns(df))
     if len(df) > limit:
         st.caption(f"Showing the first {limit:,} of {len(df):,} rows; the download has them all.")

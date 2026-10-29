@@ -58,6 +58,9 @@ class _Cursor:
         out = _call(self._connector, "/query", {"sql": sql}, self._login)
         self.description = [(c, None, None, None, None, None, None) for c in out["columns"]]
         self._rows = [tuple(r) for r in out["rows"]]
+        if out.get("truncated"):            # the server's own row limit: never pass a cut-off result as complete
+            raise RuntimeError(f"The data lake server returned only its first {len(self._rows):,} rows (its own "
+                               "row limit, MOCK_LAKE_MAX_ROWS).")
 
     def fetchmany(self, size: int):
         rows, self._rows = self._rows[:size], self._rows[size:]

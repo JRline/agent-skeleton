@@ -284,8 +284,9 @@ class RequestReview(TempDirs):
         self.assertEqual(state["events"][-1]["payload"]["reviewer_notes"], ["Scans every date"])
 
     def test_writes_are_not_reviewed_as_requests(self):
+        """export_query is reviewed for its query (it reads the lake); its only write is the user's own file."""
         from agent.config import REVIEWED_TOOLS
-        self.assertEqual(set(REVIEWED_TOOLS), {"sql_query", "run_python", "read_file"})
+        self.assertEqual(set(REVIEWED_TOOLS), {"sql_query", "export_query", "run_python", "read_file"})
 
 
 class SqlFormat(TempDirs):

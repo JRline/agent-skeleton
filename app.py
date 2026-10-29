@@ -450,6 +450,12 @@ def render_event(ev: dict, verbose: bool) -> None:
             st.code(format_sql(p["input"].get("sql", "")), language="sql")
             st.caption(f"Read-only. The server returns at most {config.MAX_SQL_ROWS:,} rows; the result is saved as "
                        f"`{p['input'].get('save_as', '')}` and later steps reuse it without asking again.")
+        elif kind == "approval" and p["tool"] == "export_query":
+            st.markdown(f"**Approval requested:** export this query to `{p['input'].get('name', '')}`")
+            explain_request(p)
+            st.code(format_sql(p["input"].get("sql", "")), language="sql")
+            st.caption(f"Read-only. Every row (up to {config.EXPORT_MAX_ROWS:,}) is written to a CSV file for you; "
+                       "the agent sees only the row count and the first rows.")
         elif kind == "approval" and p["tool"] == "read_file":
             st.markdown(f"**Approval requested:** read your file `{p['input'].get('path', '')}`")
             explain_request(p)
@@ -539,6 +545,8 @@ if s:
 JOB_NOTES = {
     "sql_query": ("Querying the data lake", f"Large queries can take up to {config.SQL_TIMEOUT_S // 60} minutes. The "
                                             "result appears here when it finishes; you can leave this page open."),
+    "export_query": ("Exporting from the data lake", f"Large exports can take up to {config.SQL_TIMEOUT_S // 60} "
+                                                    "minutes. The file appears here when it finishes."),
     "run_python": ("Running the analysis", ""),
     "read_file": ("Reading your file", ""),
 }

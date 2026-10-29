@@ -54,7 +54,7 @@ class Toolkits(LakeOff):
         self.assertNotIn("describe_dataset once per dataset", system)
         others = system.split("## Other toolkits", 1)[1].split("## Tools", 1)[0]
         self.assertIn("- datalake: ", others)                          # one line, so the agent can ask for it
-        self.assertIn("Tools: list_datasets, describe_dataset, sql_query.", others)
+        self.assertIn("Tools: list_datasets, describe_dataset, sql_query, export_query.", others)
         system = first_prompt(new_state("hi", toolkits=["datalake"]))[0]["content"]
         self.assertIn("sql_query", system)
         self.assertIn("describe_dataset once per dataset", system)

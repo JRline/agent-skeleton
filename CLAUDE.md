@@ -144,6 +144,10 @@ from the connector's optional `sample.py` (git-ignored `data/`, never inside `sa
   full docs; the request check gets the current step only; old tool results and calls are shortened (refs kept);
   no repeated dataset docs. Three Haiku tasks score 1.00 at 1.8k / 3.6k / 4.1k tokens per call, level with main
   (1.9k / 3.4k / 4.1k). 289 unit tests pass.
+- Exports (2026-10-29): `export_query` (datalake toolkit) streams the rows of one approved SELECT to a CSV in
+  `sandbox/outputs/<run>/`, past the `MAX_SQL_ROWS` analysis cap, up to `EXPORT_MAX_ROWS` (5,000,000); the model
+  sees only the row count and first rows. The file is always attached to the answer.
+  The `api` backend is now called `chatgpt`. 300 unit tests pass.
 
 ## Next tasks, in order
 1. Pin `requirements.txt` to production's exact Python and package versions (ask the owner). The grid number

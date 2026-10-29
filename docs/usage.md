@@ -31,7 +31,9 @@ How a session works, the tools and skills, the data lake and attachments, and th
   a database, the local sample); each of its datasets (a table or view) is described by one file in its
   `datasets/` folder, and only described datasets can be queried. Tools `list_datasets` (by connector),
   `describe_dataset` and `sql_query` (one read-only SELECT; the result is saved as a work table in
-  `sandbox/work/<run_id>/`). A query reads datasets of one connector; to combine connectors, the agent queries each
+  `sandbox/work/<run_id>/`). To get the rows themselves as a file, ask for an export: `export_query` writes every
+  row (up to `EXPORT_MAX_ROWS`, default 5,000,000) to a CSV in `sandbox/outputs/<run_id>/` after your approval, and
+  the agent sees only the row count and the first rows. A query reads datasets of one connector; to combine connectors, the agent queries each
   and joins the extracts with `run_python`. Nothing is ever loaded, uploaded or written to a data source, and
   attached files are never part of one: they are local inputs, read with `read_file` / `run_python`. Writes are
   refused twice: by `check_select` and by the read-only connection (account). How to add one: `docs/extensions.md`.
@@ -81,7 +83,8 @@ How a session works, the tools and skills, the data lake and attachments, and th
   SQL extracts and aggregates; Python analyses the small extracts.
 - **IO cost** (datasets can hold billions of rows, input files 50k+):
   - every query asks the server for at most `MAX_SQL_ROWS` + 1 rows (`LIMIT`, or the connection kind's
-    `limit_sql`); a result over the cap is refused with advice to filter and aggregate in SQL, never truncated;
+    `limit_sql`); a result over the cap is refused with advice to filter and aggregate in SQL, never truncated
+    (an export, `export_query`, has its own cap, `EXPORT_MAX_ROWS`, and streams to a file);
   - datasets, columns and partitions are fetched once per `LAKE_META_TTL_S`; the same SQL in a conversation reuses its
     saved table (`refresh: true` forces a new query);
   - large datasets set `required_filters` in their file; unfiltered queries are refused;

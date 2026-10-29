@@ -32,6 +32,10 @@ MODEL_RETRIES = 3
 # Data sources are remote and read-only: nothing is ever loaded or written to them, and their data is never inside
 # sandbox/ (that is the user's local files). Which connectors are on: CONNECTORS (default all; agent/connectors).
 MAX_SQL_ROWS = 5000             # rows a query may return; more is an error that asks for aggregation in SQL
+# export_query streams rows straight to a CSV in the run's outputs (never into memory or the prompt), so its cap only
+# protects the shared server and the disk.
+EXPORT_MAX_ROWS = int(os.getenv("EXPORT_MAX_ROWS", "5000000"))
+UI_MAX_DOWNLOAD_MB = 200        # larger result files are not offered as an in-page download (the path is shown)
 LAKE_META_TTL_S = 600           # datasets, columns and partitions are cached this long (one round trip per session)
 READ_FILE_STORED_ROWS = 200     # read_file stores this many rows under its ref; the file itself stays the source
 UI_MAX_GRID_ROWS = 1000         # rows shown in a result grid (the download has them all)
@@ -55,7 +59,7 @@ MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "15"))   # executor steps per run
 MAX_REPAIRS = 2                 # JSON repair attempts at effort "none" before escalating
 MAX_REVIEW_ROUNDS = 2
 MAX_ACTION_REJECTIONS = 2       # requests sent back before the user is asked anyway (with the reviewer's notes)
-REVIEWED_TOOLS = ("sql_query", "run_python", "read_file")   # checked by the reviewer before approval           # reviewer rejections before finishing with warnings
+REVIEWED_TOOLS = ("sql_query", "export_query", "run_python", "read_file")   # checked by the reviewer before approval           # reviewer rejections before finishing with warnings
 MAX_CONSECUTIVE_ERRORS = 2      # unparseable replies in a row before aborting
 MAX_REPEATS = 2                 # identical tool calls in a row before aborting
 PROMPT_BUDGET_TOKENS = 6000     # rough budget per model call (chars / 4)
