@@ -1,8 +1,8 @@
 """Analysis skills: reusable step lists written in Markdown (extensions/skills/*.md), no code needed.
 
 A skill file has front matter (name, description, when_to_use, toolkits, datasets, references) and three sections.
-`datasets` lists the datasets the skill is written for, from any of the enabled connectors (e.g. usage_limits,
-fx_rates): such a skill knows their fields and rules and is only for questions about them; once the skill is
+`datasets` lists the datasets the skill is written for, from any of the enabled connectors (e.g. a limits
+view): such a skill knows their fields and rules and is only for questions about them; once the skill is
 accepted their documentation is in the agent's prompt. A skill without datasets is general (e.g. any attached file).
 `references` are other sandbox documents the skill relies on (methodology): while the skill is active they are the
 run's CONTEXT (small ones inline, larger ones via search_docs). Sections:

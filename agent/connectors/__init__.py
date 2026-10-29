@@ -1,9 +1,10 @@
 """Connectors and their datasets, loaded from extensions/connectors/ (docs/extensions.md, docs/design.md §6).
 
 A connector is one connection to a data source (a server, a database, the local synthetic lake): a folder with
-`connector.md` (front matter: name, kind, description, needs_login, kind settings; body: notes every dataset shares)
-and `datasets/<name>.md`, one file per dataset (a table or view: its meaning, filters and columns). The connection
-code is a built-in kind in this package (`sqlite`, `mock`, `odbc`), or `connector.py` in the folder (`kind: custom`).
+`connector.py` (upper-case constants: NAME, KIND, DESCRIPTION, NEEDS_LOGIN, ABOUT (notes every dataset shares) and the
+kind's settings, e.g. CONNECTION_STRING and DIALECT for odbc) and `datasets/<name>.md`, one file per dataset (a table
+or view: its meaning, filters and columns). The connection code is a built-in kind in this package (`sqlite`, `mock`,
+`odbc`), or, with KIND = "custom", the functions below defined in connector.py itself.
 
 A kind module provides:
   connect(connector, login) -> DB-API connection (read-only)
@@ -13,7 +14,7 @@ A kind module provides:
   source(connector) -> str                                       (optional: identifies the server, for caching)
 
 Settings: CONNECTORS (comma-separated names; default every folder not starting with "_") picks the enabled ones, and
-CONNECTOR_<NAME>_<KEY> overrides a front matter value, e.g. CONNECTOR_SAMPLE_LAKE_KIND=mock.
+CONNECTOR_<NAME>_<KEY> overrides a constant, e.g. CONNECTOR_SAMPLE_LAKE_KIND=mock.
 """
 from __future__ import annotations
 
@@ -31,7 +32,7 @@ OVERRIDES: dict[str, dict] = {}        # name -> settings set in code (tests)
 
 
 def parse_front_matter(text: str) -> tuple[dict, str]:
-    """`---` / `key: value` lines / `---`, then the body. Shared by skills, connectors and datasets; a line starting
+    """`---` / `key: value` lines / `---`, then the body. Shared by skills and datasets; a line starting
     with # and a trailing " # comment" are ignored."""
     m = re.match(r"---\s*\n(.*?)\n---\s*\n?(.*)", text, flags=re.S)
     if not m:
@@ -87,6 +88,7 @@ class Connector:
     settings: dict = field(default_factory=dict)
     about: str = ""
     datasets: dict[str, Dataset] = field(default_factory=dict)
+    code: object = field(default=None, repr=False)     # the loaded connector.py
 
     def setting(self, key: str, default: str = "") -> str:
         env = os.getenv(f"CONNECTOR_{self.name.upper()}_{key.upper()}")
@@ -97,21 +99,28 @@ class Connector:
         return value if value.is_absolute() else self.folder / value
 
     def module(self):
-        """The connection code: a built-in kind, or connector.py in the connector's folder."""
+        """The connection code: a built-in kind, or connector.py itself (KIND = "custom")."""
         if self.kind == "custom":
-            spec = importlib.util.spec_from_file_location(f"connector_{self.name}", self.folder / "connector.py")
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            return module
+            return self.code
         return importlib.import_module(f"agent.connectors.{self.kind}")
 
 
+def _module(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load(folder: Path) -> Connector:
-    meta, about = parse_front_matter((folder / "connector.md").read_text())
+    """A connector from its connector.py: Python, so a connection string is a plain literal (no front-matter parsing
+    or quoting rules) and a custom kind's code sits next to its settings."""
+    code = _module(folder / "connector.py", f"connector_{folder.name}")
+    meta = {k.lower(): v for k, v in vars(code).items() if k.isupper()}
     meta.update(OVERRIDES.get(meta.get("name", folder.name), {}))
     name = meta.get("name") or folder.name
     conn = Connector(name=name, kind="", folder=folder, description=meta.get("description", ""),
-                     settings=meta, about=" ".join(about.split()))
+                     settings=meta, about=" ".join(str(meta.get("about", "")).split()), code=code)
     conn.kind = conn.setting("kind", "sqlite")
     conn.needs_login = conn.setting("needs_login", "no").lower() in ("yes", "true", "1")
     for path in sorted((folder / "datasets").glob("*.md")):
@@ -172,12 +181,21 @@ def build_samples(force: bool = False) -> list[str]:
         data = conn.path("data", "data")
         if not script.exists() or (not force and all((data / f"{d}.csv").exists() for d in conn.datasets)):
             continue
-        spec = importlib.util.spec_from_file_location(f"sample_{conn.name}", script)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        module.write()
+        _module(script, f"sample_{conn.name}").write()
         built.append(conn.name)
     return built
+
+
+def sample_inputs() -> dict[str, str]:
+    """Synthetic input files the connectors' sample data goes with (file name -> text), from each `sample.py` that
+    defines `inputs()`, e.g. a user's mapping table from the source's own codes to the keys of another dataset."""
+    out = {}
+    for conn in all_connectors().values():
+        script = conn.folder / "sample.py"
+        if script.exists():
+            module = _module(script, f"sample_{conn.name}")
+            out.update(module.inputs() if hasattr(module, "inputs") else {})
+    return out
 
 
 def dataset_doc(name: str) -> str:

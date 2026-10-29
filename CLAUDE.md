@@ -10,7 +10,7 @@ read the section relevant to your task before changing code. `docs/setup.md` has
 - UI: `streamlit run app.py`
 - Backend check: `python scripts/smoke_model.py --backend ollama` (or `--backend claude`: Haiku via the Claude Code CLI;
   `--backend chatgpt`: ChatGPT or any OpenAI-compatible API, see `agent/backends/openai_api.py`)
-- Mock lake server (closer to production): `python scripts/mock_lake_server.py`, then run with
+- Mock lake server (closer to production): `MOCK_LAKE_CONNECTOR=sample_lake python scripts/mock_lake_server.py`, then run with
   `CONNECTOR_SAMPLE_LAKE_KIND=mock` (per-user sign-in: start the server with `MOCK_LAKE_USERS=analyst:secret` and
   the agent with `CONNECTOR_SAMPLE_LAKE_NEEDS_LOGIN=yes`)
 - Replay script of a conversation: `python cli.py --export-script RUN_ID` (or the app's Export button)
@@ -38,6 +38,10 @@ read the section relevant to your task before changing code. `docs/setup.md` has
   `resolve_pending` (LangGraph `Command(resume=...)`).
 - The data lake sign-in (`agent/credentials.py`) lives in memory only: never write it to state, logs, checkpoints,
   settings, prompts or error text.
+- No sample connector, dataset or sample data is hard-coded in the core (`agent/`, `app.py`, `cli.py`, `scripts/`,
+  prompts): they are extension modules under `extensions/connectors/<name>/` (`connector.py`, `datasets/*.md`,
+  `sample.py` with `write()` and optional `inputs()`). Core code finds them through `agent.connectors`; only tests
+  and extensions name them.
 - Tools never raise into the loop: `dispatch` turns errors into `{"ok": false, "error": ...}`.
 - Tools may only touch files inside `config.SANDBOX_DIR` (use `tools.sandbox_path`).
 - Anything that writes, sends or deletes must be `risky=True` (needs approval). The one exception is
@@ -90,7 +94,7 @@ Write steps in terms of the tools (sql_query, run_python, save_table) and keep s
 (entity, dates, slice, breakdown) come from the request. `tests/test_skills.py` checks that every bundled skill parses.
 
 **Add a data source or dataset**: a connector is a folder `extensions/connectors/<name>/` (copy `_template/`):
-`connector.md` (kind odbc / mock / sqlite / custom, `needs_login`, settings) and one `datasets/<dataset>.md` per
+`connector.py` (constants: KIND odbc / mock / sqlite / custom, NEEDS_LOGIN, CONNECTION_STRING, ...) and one `datasets/<dataset>.md` per
 table, in the format of `docs/dataset_entry.md`. Only described datasets can be queried. Synthetic local data comes
 from the connector's optional `sample.py` (git-ignored `data/`, never inside `sandbox/`).
 
@@ -136,7 +140,7 @@ from the connector's optional `sample.py` (git-ignored `data/`, never inside `sa
   golden tasks on Haiku (`file_average`, `rwa_latest_total`) score 1.00. The full golden eval has not been run on
   this branch yet.
 - Extensions layout (2026-10-29): `plugins/` became `extensions/` with four types: `connectors/<name>/`
-  (connector.md + one `datasets/<dataset>.md` per table; built-in kinds sqlite, mock, odbc in `agent/connectors/`),
+  (connector.py + one `datasets/<dataset>.md` per table; built-in kinds sqlite, mock, odbc in `agent/connectors/`),
   `skills/` (list `datasets:` from any connectors), `toolkits/`, `examples/`; each with a `_template`. "View" is now
   "dataset". Sign-in is per connector (sidebar, CLI `--sign-in name=user`). Root holds only `app.py` and `cli.py`;
   scripts moved to `scripts/`, UI helpers to `agent/ui/`; `mock_lake/` and the data dictionary are gone.

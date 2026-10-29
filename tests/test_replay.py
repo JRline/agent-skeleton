@@ -225,8 +225,8 @@ class TwoConnectors(TempDirs):
         fx = ext / "connectors" / "fx_lake"
         (fx / "datasets").mkdir(parents=True)
         (fx / "data").mkdir()
-        (fx / "connector.md").write_text("---\nname: fx_lake\nkind: sqlite\ndescription: Synthetic FX rates.\n"
-                                        "data: data\n---\nAll data is synthetic.\n")
+        (fx / "connector.py").write_text('NAME = "fx_lake"\nKIND = "sqlite"\nDESCRIPTION = "Synthetic FX rates."\n'
+                                        'DATA = "data"\nABOUT = "All data is synthetic."\n')
         (fx / "datasets" / "fx_rates.md").write_text("---\nname: fx_rates\ndescription: Synthetic daily FX rates.\n"
                                                     "---\nColumns: as_of_date, currency, rate.\n")
         pd.DataFrame({"as_of_date": ["2026-03-26"] * 2, "currency": ["USD", "EUR"],

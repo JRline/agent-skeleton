@@ -47,7 +47,7 @@ agent/           the framework (fixed): the LangGraph agent (graph.py), its step
                  the chat model for a text-only API, tools and sandbox, connectors (agent/connectors/: sqlite,
                  mock, odbc), the read-only SQL guard, sign-in (memory only), prompts, UI helpers (agent/ui/)
 extensions/      added per environment, one folder per type (contract: docs/extensions.md):
-  connectors/    one folder per data source: connector.md + datasets/<dataset>.md (one file per table)
+  connectors/    one folder per data source: connector.py + datasets/<dataset>.md (one file per table)
   skills/        Markdown recipes that may use datasets of several connectors
   toolkits/      Python tools the agent can call
   examples/      worked plans for the planner

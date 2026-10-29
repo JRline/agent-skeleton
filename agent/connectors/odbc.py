@@ -1,10 +1,9 @@
 """Connection kind `odbc`: a database or data lake server over ODBC (pyodbc), signed in as the user.
 
-Settings in connector.md: `connection_env`, the name of the environment variable that holds the connection string
-without the sign-in (driver, server, port, database; default LAKE_ODBC), `needs_login: yes`, and `dialect`, the
-server's SQL dialect as sqlglot names it (e.g. trino, tsql, oracle, postgres; default generic SQL): queries are read
-and row limits written in it. The user's ID and
-password come from their sign-in (agent/credentials.py, memory only) and are added as UID and PWD; never put them in
+Settings in connector.py: CONNECTION_STRING, the connection string without the sign-in (driver, server, port,
+database), NEEDS_LOGIN = True, and DIALECT, the server's SQL dialect as sqlglot names it (e.g. trino, tsql, oracle,
+postgres; default generic SQL): queries are read and row limits written in it. The user's ID and password come from
+their sign-in (agent/credentials.py, memory only) and are added as UID and PWD; never put them in
 the connection string, code, the repository, environment files or logs. The datasets the agent may query are the
 dataset files in the connector's folder.
 
@@ -12,11 +11,7 @@ Needs pyodbc and the server's ODBC driver in the closed environment (check they 
 """
 from __future__ import annotations
 
-import os
-
 from .. import config
-
-EXAMPLE = "DRIVER={Lake ODBC Driver};SERVER=lake.example.internal;PORT=9996;DATABASE=analytics;SSL=1"
 
 
 def _value(text: str) -> str:
@@ -25,7 +20,9 @@ def _value(text: str) -> str:
 
 
 def connection_string(connector, login) -> str:
-    base = os.getenv(connector.setting("connection_env", "LAKE_ODBC"), EXAMPLE)
+    base = connector.setting("connection_string").rstrip(";")
+    if not base:
+        raise RuntimeError(f"Connector {connector.name} has no CONNECTION_STRING in its connector.py.")
     if login is None:                         # needs_login: no (the DSN signs in by itself)
         return base
     return f"{base};UID={_value(login.user)};PWD={_value(login.password)}"

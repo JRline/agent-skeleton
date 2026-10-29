@@ -233,6 +233,12 @@ def mapping_csv() -> str:
     return codes().to_csv(index=False)
 
 
+def inputs() -> dict[str, str]:
+    """The user's mapping of credit portfolio and trading desk codes to product_id and location (joins
+    credit_exposures and desk_risk to usage_limits), written into the sample inputs (scripts/setup_local.py)."""
+    return {"book_mapping.csv": mapping_csv()}
+
+
 def month_ends(last: date) -> list[str]:
     """The last business day of each month, up to `last`."""
     out: dict[tuple, date] = {}

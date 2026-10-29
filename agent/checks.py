@@ -85,7 +85,7 @@ def _suggestion(state: dict, parsed: _Plan) -> dict | None:
 
 def _datasets_outside(skill, goal: str) -> list[str]:
     """Datasets the request names that a skill written for certain datasets does not cover. Such a skill's steps
-    cannot answer it (e.g. a usage_limits skill offered for a reconciliation with credit_exposures), so it is not
+    cannot answer it (e.g. a skill for one view offered for a reconciliation with another), so it is not
     suggested; a general skill (no datasets) always may be."""
     if not getattr(skill, "datasets", None):
         return []

@@ -133,8 +133,9 @@ variable named.
 | `SIM_INNER`, `SIM_MEMORY_TOKENS` | `agent.backends.claude_cli`, `24000` | production stand-in (`agent/backends/session_sim.py`): inner model and memory size before compression |
 | `CLAUDE_MODEL`, `CLAUDE_CLI` | `claude-haiku-5-5`, auto | see `agent/backends/claude_cli.py` |
 | `CONNECTORS` | (all) | comma-separated connectors to enable (folders in `extensions/connectors/`) |
-| `CONNECTOR_<NAME>_<KEY>` | | overrides a value in a connector's `connector.md`, e.g. `CONNECTOR_SAMPLE_LAKE_KIND=mock`, `CONNECTOR_SAMPLE_LAKE_NEEDS_LOGIN=yes` |
-| `LAKE_ODBC` (or the name in `connection_env`) | | an `odbc` connector's connection string: driver, server, port, database; no user or password (those come from each user's sign-in) |
+| `CONNECTOR_<NAME>_<KEY>` | | overrides a constant in a connector's `connector.py`, e.g. `CONNECTOR_SAMPLE_LAKE_KIND=mock`, `CONNECTOR_SAMPLE_LAKE_NEEDS_LOGIN=yes` |
+| `CONNECTOR_<NAME>_CONNECTION_STRING` | | overrides an `odbc` connector's `CONNECTION_STRING` (driver, server, port, database; no user or password: those come from each user's sign-in) |
+| `MOCK_LAKE_CONNECTOR` (or `MOCK_LAKE_DATA`) | first with local data | mock server: whose synthetic data it serves |
 | `MOCK_LAKE_URL`, `MOCK_LAKE_TOKEN` | `http://127.0.0.1:8765`, none | client settings for the mock lake server (`kind: mock`) |
 | `MOCK_LAKE_USERS` | none | mock server: `user:password,...` synthetic test accounts for per-user sign-in |
 | `AGENT_EXTENSIONS` | `extensions/` | extensions folder (connectors/, skills/, toolkits/, examples/); `AGENT_SKILLS`, `AGENT_TOOLKITS`, `AGENT_EXAMPLES` point one type elsewhere |

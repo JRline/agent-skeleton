@@ -61,6 +61,6 @@ default_filters: <column> = '<value>' AND <column> = '<value>' ...
 2. Skills for this dataset list it in `datasets:` and use the names above.
 3. Add golden tasks for the dataset (`docs/maintenance.md`, procedure E) and run the evals.
 
-Notes every dataset of a connector shares (calendar, units) go in the body of its `connector.md`, once. Sign-in is
-not part of a dataset: a connector that needs each user's own login says `needs_login: yes`; never put a user ID or
+Notes every dataset of a connector shares (calendar, units) go in `ABOUT` in its `connector.py`, once. Sign-in is
+not part of a dataset: a connector that needs each user's own login says `NEEDS_LOGIN = True`; never put a user ID or
 password in any file.

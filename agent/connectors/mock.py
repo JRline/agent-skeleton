@@ -1,7 +1,7 @@
 """Connection kind `mock`: the mock lake server (scripts/mock_lake_server.py), a separate read-only process over HTTP.
 
-Closer to a real server than `sqlite`: network, per-user sign-in, latency. Settings: `url` (default MOCK_LAKE_URL or
-http://127.0.0.1:8765). With `needs_login: yes` each user's ID and password go as HTTP basic auth (the server is
+Closer to a real server than `sqlite`: network, per-user sign-in, latency. Settings: URL (default MOCK_LAKE_URL or
+http://127.0.0.1:8765). With NEEDS_LOGIN = True each user's ID and password go as HTTP basic auth (the server is
 started with MOCK_LAKE_USERS); otherwise an optional MOCK_LAKE_TOKEN. Standard library only.
 """
 from __future__ import annotations

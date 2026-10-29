@@ -1,18 +1,19 @@
 """Mock data lake server: a stand-in for the remote, read-only data lake cluster, for local testing only.
 
 Run it in its own terminal (standard library + pandas only, nothing to install):
-    python scripts/mock_lake_server.py              # http://127.0.0.1:8765, data of the sample_lake connector
-Then start the agent with CONNECTOR_SAMPLE_LAKE_KIND=mock (the sample_lake connector, reached over HTTP).
+    MOCK_LAKE_CONNECTOR=<name> python scripts/mock_lake_server.py   # http://127.0.0.1:8765, that connector's data
+Then start the agent with CONNECTOR_<NAME>_KIND=mock (that connector, reached over HTTP).
 
 Why a separate process: the agent should meet the lake the way it meets the production lake, as a remote service it can only
 query. Its data is outside the agent's sandbox, the connection can fail or be slow, and the server itself refuses
 writes, like a read-only account, whatever the client sends.
 
 API (JSON over HTTP, localhost only):
-    GET  /datasets                   -> {"datasets": ["usage_limits", ...]}
+    GET  /datasets                   -> {"datasets": ["<dataset>", ...]}
     POST /query {"sql": "SELECT ..."} -> {"columns": [...], "rows": [[...]], "truncated": false}
     errors                           -> HTTP 400/401 with {"error": "..."}
-Optional settings (environment): MOCK_LAKE_PORT (8765), MOCK_LAKE_DATA (extensions/connectors/sample_lake/data), MOCK_LAKE_USERS ("user:password,..."; if set, each
+Optional settings (environment): MOCK_LAKE_PORT (8765), MOCK_LAKE_CONNECTOR (whose local data to serve; default the
+first connector that has a data folder), MOCK_LAKE_DATA (a data folder instead), MOCK_LAKE_USERS ("user:password,..."; if set, each
 client signs in with its own user ID and password, HTTP basic auth), MOCK_LAKE_TOKEN (if set,
 clients must send "Authorization: Bearer <token>"), MOCK_LAKE_LATENCY_MS (0; simulated network delay),
 MOCK_LAKE_MAX_ROWS (100000).
@@ -30,8 +31,6 @@ from pathlib import Path
 
 import pandas as pd
 
-DATA = Path(os.getenv("MOCK_LAKE_DATA", Path(__file__).resolve().parent.parent / "extensions" / "connectors"
-                                        / "sample_lake" / "data"))
 _READ_ONLY = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION}
 
 
@@ -114,14 +113,31 @@ def make_handler(lake: ReadOnlyLake, token: str = "", latency_ms: int = 0, max_r
     return Handler
 
 
-def serve(port: int = 8765, data_dir: Path = DATA, token: str = "", latency_ms: int = 0,
+def default_data() -> Path:
+    """The folder of CSVs to serve. The server names no connector or dataset itself: those are extensions."""
+    if os.getenv("MOCK_LAKE_DATA"):
+        return Path(os.environ["MOCK_LAKE_DATA"])
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from agent import connectors
+    conns = connectors.all_connectors()
+    name = os.getenv("MOCK_LAKE_CONNECTOR")
+    for conn in [conns[name]] if name in conns else conns.values():
+        if conn.path("data", "data").is_dir():
+            return conn.path("data", "data")
+    raise SystemExit(f"No local data to serve (connector {name or 'any'}): set MOCK_LAKE_CONNECTOR or MOCK_LAKE_DATA, "
+                     "or run python scripts/setup_local.py.")
+
+
+def serve(port: int = 8765, data_dir: Path | None = None, token: str = "", latency_ms: int = 0,
           max_rows: int = 100_000, quiet=False, users: dict[str, str] | None = None) -> ThreadingHTTPServer:
     """Build the server (bound to localhost only). Call serve_forever() on it; tests use port 0."""
-    lake = ReadOnlyLake(data_dir)
+    lake = ReadOnlyLake(data_dir or default_data())
     return ThreadingHTTPServer(("127.0.0.1", port), make_handler(lake, token, latency_ms, max_rows, quiet, users))
 
 
 if __name__ == "__main__":
+    DATA = default_data()
     server = serve(int(os.getenv("MOCK_LAKE_PORT", "8765")), DATA, os.getenv("MOCK_LAKE_TOKEN", ""),
                    int(os.getenv("MOCK_LAKE_LATENCY_MS", "0")), int(os.getenv("MOCK_LAKE_MAX_ROWS", "100000")),
                    users=_users(os.getenv("MOCK_LAKE_USERS", "")))

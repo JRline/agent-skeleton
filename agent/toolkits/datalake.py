@@ -166,7 +166,7 @@ def sql_query(args: SqlArgs, ctx: ToolContext):
 class ExportArgs(BaseModel):
     sql: str = Field(description="One read-only SELECT on the datasets of one connector, with the required filters "
                                  "and only the columns the user asked for")
-    name: str = Field(description="File name for the user, ending in .csv, e.g. usage_limits_2026Q3.csv")
+    name: str = Field(description="File name for the user, ending in .csv, e.g. exposures_2026Q3.csv")
 
 
 @tool("export_query", "Export the rows of one read-only SQL SELECT to a CSV file for the user (an extract to "

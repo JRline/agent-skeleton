@@ -359,7 +359,7 @@ def _sources(items: list[dict]) -> dict[str, dict]:
         kind = conn.kind if conn else "odbc"
         out[name] = {"kind": "mock" if kind in ("mock", "sqlite") else "odbc",   # local CSVs are served by the mock server
                      "url": conn.setting("url") if conn and kind == "mock" else "",
-                     "odbc_env": conn.setting("connection_env", "LAKE_ODBC") if conn else "LAKE_ODBC",
+                     "odbc": conn.setting("connection_string") if conn and kind == "odbc" else "",
                      "login": bool(conn and conn.needs_login)}
     return out
 
@@ -443,8 +443,8 @@ import numpy as np
 import pandas as pd
 
 # The data sources the queries ran on (one per connector); each query names its own: run_sql(SQL, "<source>").
-#   kind "odbc": the server over ODBC; odbc_env names the environment variable holding the connection string
-#                without the sign-in (driver, server, database).
+#   kind "odbc": the server over ODBC; odbc is its connection string without the sign-in (driver, server, database),
+#                as in the connector's connector.py.
 #   kind "mock": the local mock lake server (python scripts/mock_lake_server.py) at url, for testing only;
 #                an empty url means MOCK_LAKE_URL or http://127.0.0.1:8765.
 #   login:       sign in as yourself: your user ID in ANALYSIS_USER; the password is asked once per source and
@@ -469,7 +469,7 @@ def run_sql(sql: str, source: str) -> pd.DataFrame:
     """One read-only SELECT on one data source."""
     if setting(source, "kind") == "odbc":
         import pyodbc                                          # the server's ODBC driver must be installed
-        dsn = os.environ[setting(source, "odbc_env")]
+        dsn = setting(source, "odbc").rstrip(";")
         if setting(source, "login"):                         # braced values: a ; or = in them cannot break the string
             user, pwd = (v.replace("}", "}}") for v in (_user(), _password(source)))
             dsn += f";UID={{{user}}};PWD={{{pwd}}}"

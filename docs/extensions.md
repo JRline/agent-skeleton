@@ -4,7 +4,7 @@ Read this before adding anything to `extensions/`. It is the contract between ex
 
 | Type | What it is | Where | Code? | Template |
 |---|---|---|---|---|
-| Connector | one connection to a data source (server, database, local sample) | `extensions/connectors/<name>/connector.md` | only for a new connection kind | `extensions/connectors/_template/` |
+| Connector | one connection to a data source (server, database, local sample) | `extensions/connectors/<name>/connector.py` | only for a new connection kind | `extensions/connectors/_template/` |
 | Dataset | one table or view on a connector: meaning, filters, columns | `extensions/connectors/<connector>/datasets/<name>.md` | no | `…/_template/datasets/_template.md` |
 | Skill | a recipe: steps, checks, output; may use datasets of several connectors | `extensions/skills/<name>.md` | no | `extensions/skills/_template.md` |
 | Toolkit | Python tools the agent can call | `extensions/toolkits/<name>.py` | yes | `extensions/toolkits/_template.py` |
@@ -19,28 +19,29 @@ and their tests (`tests/test_ext_<name>.py`). **Do not change the framework** (`
 `agent/prompts/`, `agent/config.py`, `scripts/`) **or the docs** (`README.md`, `CLAUDE.md`, everything in `docs/`)
 unless the user specifically agrees. If an extension seems to need a framework change, stop and ask; describe it.
 
-## Connectors (`extensions/connectors/<name>/connector.md`)
-```markdown
----
-name: lake_odbc
-kind: odbc                 # odbc | mock | sqlite | custom (connector.py next to this file)
-description: The production data lake, read-only.
-needs_login: yes           # each user signs in with their own user ID and password
-connection_env: LAKE_ODBC  # odbc: env variable with the connection string WITHOUT user or password
----
-Notes every dataset of this connector shares (calendar, units, how dates work).
+## Connectors (`extensions/connectors/<name>/connector.py`)
+```python
+NAME = "lake_odbc"
+KIND = "odbc"              # odbc | mock | sqlite | custom (the functions below, defined in this file)
+DESCRIPTION = "The production data lake, read-only."
+NEEDS_LOGIN = True         # each user signs in with their own user ID and password
+CONNECTION_STRING = "DRIVER={Lake ODBC Driver};SERVER=lake.example.internal;PORT=9996;DATABASE=analytics"  # no UID/PWD
+DIALECT = "trino"
+ABOUT = """Notes every dataset of this connector shares (calendar, units, how dates work)."""
 ```
 - Built-in kinds live in `agent/connectors/`: `odbc` (pyodbc; UID and PWD come from the user's sign-in),
-  `mock` (the local mock lake server, `url`), `sqlite` (a folder of CSVs, `data`). Set `dialect` to the server's SQL
+  `mock` (the local mock lake server, `URL`), `sqlite` (a folder of CSVs, `DATA`). Set `DIALECT` to the server's SQL
   dialect as sqlglot names it (e.g. trino, tsql, oracle, postgres): queries are read and row limits written in it. Use `custom` only when none
-  fits: `connector.py` provides `connect(connector, login)`, `list_datasets(connector, login)` and optionally
+  fits: `KIND = "custom"` and `connector.py` itself defines `connect(connector, login)`, `list_datasets(connector, login)` and optionally
   `partitions(connector, dataset, column, login)`, `limit_sql(sql, n)`, `source(connector)`. Read-only, always.
-- Sign-in: with `needs_login: yes` the sidebar shows **Data sign-in: <name>** (CLI `--sign-in name=user`). The
+- Sign-in: with `NEEDS_LOGIN = True` the sidebar shows **Data sign-in: <name>** (CLI `--sign-in name=user`). The
   login is held in memory only, per conversation and connector, never written anywhere, masked in errors.
 - Settings: `CONNECTORS=a,b` picks the enabled connectors (default all); `CONNECTOR_<NAME>_<KEY>` overrides any
-  front matter value (e.g. `CONNECTOR_SAMPLE_LAKE_KIND=mock`). Never put a user ID, password or token in a file.
-- Optional `sample.py` with `write()` builds synthetic data for local runs (`scripts/setup_local.py` calls it);
-  data folders are git-ignored.
+  constant (e.g. `CONNECTOR_SAMPLE_LAKE_KIND=mock`). Never put a user ID, password or token in a file.
+- Optional `sample.py` with `write()` builds synthetic data for local runs (`scripts/setup_local.py` calls it), and
+  optional `inputs()` returns sample input files that go with it (e.g. a mapping table); data folders are git-ignored.
+- Sample connectors, datasets and their data are extensions only: the core (`agent/`, `app.py`, `cli.py`, `scripts/`,
+  prompts) never names one; it finds them through `agent.connectors`.
 
 ## Datasets (`extensions/connectors/<connector>/datasets/<name>.md`)
 One file per table or view; **only described datasets can be queried** (the files are the allowlist). Dataset

@@ -8,7 +8,7 @@ files it needs. This prints that bundle; the prompt for each task lives in docs/
   python scripts/gpt_pack.py golden "Add eval tasks for ..."
   python scripts/gpt_pack.py examples "Add an example where ..."
   python scripts/gpt_pack.py connector "Add a connector for ... (server, driver, sign-in)"
-  python scripts/gpt_pack.py dataset "Add the dataset ... (columns and notes pasted here)" [--connector sample_lake]
+  python scripts/gpt_pack.py dataset "Add the dataset ... (columns and notes pasted here)" [--connector <name>]
   python scripts/gpt_pack.py diagnose "It answered for the whole year" --run 20261025-221016-fbe9
 Add --out pack.md to write a file instead of printing. See docs/maintenance.md for the full procedures.
 """
@@ -50,7 +50,7 @@ def datasets_block(only: str | None = None) -> str:
         if only and name != only:
             continue
         rel = conn.folder.relative_to(ROOT) if conn.folder.is_relative_to(ROOT) else conn.folder
-        parts.append(f"--- {rel}/connector.md ---\n" + (conn.folder / "connector.md").read_text().strip())
+        parts.append(f"--- {rel}/connector.py ---\n" + (conn.folder / "connector.py").read_text().strip())
         for path in sorted((conn.folder / "datasets").glob("*.md")):
             if not path.name.startswith("_"):
                 parts.append(f"--- {rel}/datasets/{path.name} ---\n" + path.read_text().strip())
@@ -97,7 +97,7 @@ def build(task: str, request: str, like: str | None = None, run: str | None = No
         parts += [file_block("docs/extensions.md"), file_block("extensions/toolkits/_template.py"),
                   block("TOOLS THE AGENT ALREADY HAS", tool_list())]
     elif task == "connector":
-        parts += [file_block("docs/extensions.md"), file_block("extensions/connectors/_template/connector.md"),
+        parts += [file_block("docs/extensions.md"), file_block("extensions/connectors/_template/connector.py"),
                   file_block("agent/connectors/odbc.py"), datasets_block()]
     elif task == "dataset":
         parts += [file_block("docs/extensions.md"), file_block("extensions/connectors/_template/datasets/_template.md"),

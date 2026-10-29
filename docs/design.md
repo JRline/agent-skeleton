@@ -100,8 +100,8 @@ agent/              # the framework (fixed)
   ui/               # results_page.py (result tables), sources.py ([ref: …] → numbered Sources list)
   config.py         # budgets, limits, effort policy, paths, backend choice; environment read once (Settings)
 extensions/         # added per environment (contract: docs/extensions.md); "_" names are templates, never loaded
-  connectors/<name>/  connector.md (kind, sign-in, settings, shared notes), datasets/<dataset>.md (one per table),
-                    #   optional connector.py (kind custom) and sample.py (synthetic data into a git-ignored data/)
+  connectors/<name>/  connector.py (kind, sign-in, connection string, shared notes), datasets/<dataset>.md (one per table),
+                    #   sample.py (synthetic data into a git-ignored data/)
   skills/           # Markdown recipes; may use datasets of several connectors
   toolkits/         # Python tools
   examples/         # worked plans for the planner (planner.md)
@@ -330,17 +330,17 @@ Data sources are **remote and read-only**. Nothing is ever loaded, uploaded or w
 attached files are never part of them: they are local inputs, analysed with `read_file` / `run_python`. The toolkit
 guidance and the planner prompt say so, after a run offered a dataset skill for an uploaded workbook.
 
-- A **connector** is one connection: `extensions/connectors/<name>/connector.md` with front matter `name`, `kind`,
-  `description`, `needs_login` and the kind's settings, and a body of notes every dataset shares. Built-in kinds
-  (`agent/connectors/`): `odbc` (pyodbc; the connection string without the sign-in comes from the environment
-  variable named by `connection_env`), `mock` (the mock lake server over HTTP, `url`), `sqlite` (a folder of CSVs,
-  `data`, as a locked in-memory database). `kind: custom` loads `connector.py` from the folder. A kind provides
+- A **connector** is one connection: `extensions/connectors/<name>/connector.py`, upper-case constants `NAME`,
+  `KIND`, `DESCRIPTION`, `NEEDS_LOGIN`, `ABOUT` (notes every dataset shares) and the kind's settings. Python, so a
+  connection string is a plain literal. Built-in kinds (`agent/connectors/`): `odbc` (pyodbc; `CONNECTION_STRING`
+  without the sign-in, `DIALECT`), `mock` (the mock lake server over HTTP, `URL`), `sqlite` (a folder of CSVs,
+  `DATA`, as a locked in-memory database). `KIND = "custom"`: connector.py defines the functions itself. A kind provides
   `connect(connector, login)` and `list_datasets(connector, login)`, optionally `partitions`, `limit_sql`, `source`.
 - A **dataset** is one table or view: `datasets/<name>.md` in its connector's folder, front matter `name`,
   `description`, `partition_column`, `required_filters`, `default_filters`, then its documentation
   (`docs/dataset_entry.md`). **Only described datasets can be queried**: the files are the allowlist (intersected
   with what the server lists). Dataset names are unique across the enabled connectors.
-- `CONNECTORS` picks the enabled connectors (default all); `CONNECTOR_<NAME>_<KEY>` overrides a front matter value
+- `CONNECTORS` picks the enabled connectors (default all); `CONNECTOR_<NAME>_<KEY>` overrides a constant
   (e.g. `CONNECTOR_SAMPLE_LAKE_KIND=mock`). A connector that fails to load is reported in `connectors.ERRORS`.
 - **One connector per query:** `datalake.connector_for(sql)` finds the connector of the datasets a query reads; a
   query that mixes connectors is refused with advice to query each and combine the extracts with `run_python`.
@@ -354,15 +354,14 @@ guidance and the planner prompt say so, after a run offered a dataset skill for 
 
 - **Test datasets keyed by their own codes**, to exercise joins across sources: `credit_exposures` on
   `sample_lake` (month-end credit RWA and EAD by `portfolio_code`, approach and rating grade) and `desk_risk` on
-  a second connector, `market_lake` (its own data folder; in production its own connection string,
-  `connection_env: MARKET_ODBC`): daily VaR, stressed VaR and ES by `desk_code`. Neither knows `product_id`: the
+  a second connector, `market_lake` (its own data folder; in production its own `CONNECTION_STRING`): daily VaR, stressed VaR and ES by `desk_code`. Neither knows `product_id`: the
   user's local mapping file `inputs/book_mapping.csv` (source_system, source_code, product_id, location; written
-  with the sample inputs) links them to `usage_limits`, and the agent joins the extracts in `run_python`. Credit RWA
+  by its `sample.py` `inputs()`) links them to `usage_limits`, and the agent joins the extracts in `run_python`. Credit RWA
   summed over grades equals `usage_limits` (USED, CLOSED, BOOKED, the credit components) on the mapped keys, so a
   join can be checked exactly (`tests/test_join_sources.py`). `build_samples` runs a connector's `sample.py`
   whenever one of its documented datasets has no data file.
 
-**Sign-in (`credentials.py`).** A connector with `needs_login: yes` gets its own **Data sign-in: <name>** section in
+**Sign-in (`credentials.py`).** A connector with `NEEDS_LOGIN = True` gets its own **Data sign-in: <name>** section in
 the sidebar (user ID, password; the CLI: `--sign-in <name>=<user id>`, password asked without echo). The sign-in is
 checked with one catalogue call, then:
 - held only in this process's memory: per browser session in Streamlit's session state, and lent per conversation
@@ -801,8 +800,8 @@ state as well. This is enough to replay a run, debug failures, and evidence how 
 assembled by the harness from what ran, never by the model. Plain Python with `# %%` cells (runs end to end, or
 cell by cell in VS Code / Spyder / Jupyter). The analysis comes first as plain code; support code comes after:
 - Setup: `SOURCES`, one entry per connector the queries used (each query is sent back to the connector that holds
-  its datasets: `run_sql(SQL, "sample_lake")`). Kind `odbc` (connection string without the sign-in in the variable
-  the connector's `connection_env` names, default `LAKE_ODBC`; user ID in `ANALYSIS_USER`) or `mock` (the mock lake
+  its datasets: `run_sql(SQL, "sample_lake")`). Kind `odbc` (`odbc`: the connector's connection string without the sign-in;
+  user ID in `ANALYSIS_USER`) or `mock` (the mock lake
   server at the source's `url`, else `MOCK_LAKE_URL`). Any setting can be overridden with
   `ANALYSIS_<SOURCE>_<SETTING>` (e.g. `ANALYSIS_SAMPLE_LAKE_URL`); `ANALYSIS_LAKE=mock` sends every query to the
   mock server. The password is asked once per source and never stored. A result the server cut at its own row

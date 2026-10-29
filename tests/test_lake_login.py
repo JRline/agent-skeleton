@@ -77,7 +77,24 @@ class LakeLogin(TempDirs):
 class OdbcTemplate(TempDirs):
     def test_the_connection_string_carries_the_users_login_safely(self):
         from agent.connectors import Connector, odbc
-        conn = Connector(name="lake", kind="odbc", folder=config.EXTENSIONS_DIR, settings={"connection_env": "X_ODBC"})
-        with mock.patch.dict("os.environ", {"X_ODBC": "DRIVER={D};SERVER=s"}):
-            text = odbc.connection_string(conn, credentials.Login("analyst", "pa;ss}x"))
+        conn = Connector(name="lake", kind="odbc", folder=config.EXTENSIONS_DIR,
+                         settings={"connection_string": "DRIVER={D};SERVER=s"})
+        text = odbc.connection_string(conn, credentials.Login("analyst", "pa;ss}x"))
         self.assertEqual(text, "DRIVER={D};SERVER=s;UID={analyst};PWD={pa;ss}}x}")   # ; and } cannot break out
+
+    def test_an_odbc_connector_without_a_connection_string_says_so(self):
+        from agent.connectors import Connector, odbc
+        conn = Connector(name="lake", kind="odbc", folder=config.EXTENSIONS_DIR)
+        with self.assertRaisesRegex(RuntimeError, "no CONNECTION_STRING"):
+            odbc.connection_string(conn, None)
+
+    def test_a_custom_connector_is_its_own_connection_code(self):
+        from pathlib import Path
+        from agent import connectors
+        folder = Path(self._tmp) / "my_lake"
+        (folder / "datasets").mkdir(parents=True)
+        (folder / "connector.py").write_text('KIND = "custom"\nDESCRIPTION = "Synthetic."\n'
+                                             'def list_datasets(connector, login=None):\n    return ["a"]\n')
+        conn = connectors._load(folder)
+        self.assertEqual((conn.name, conn.kind, conn.description), ("my_lake", "custom", "Synthetic."))
+        self.assertEqual(conn.module().list_datasets(conn), ["a"])

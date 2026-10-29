@@ -1,6 +1,6 @@
 """Connection kind `sqlite`: a folder of CSV files (one per dataset) as an in-memory, read-only SQLite database.
 
-For local runs and tests (the synthetic sample lake). Setting: `data`, the folder of CSVs, relative to the
+For local runs and tests (the synthetic sample lake). Setting: DATA, the folder of CSVs, relative to the
 connector's folder. Each connection is a fresh copy, locked by an authorizer that denies anything but reading.
 """
 from __future__ import annotations

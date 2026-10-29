@@ -1,6 +1,6 @@
 """Read-only SQL access to the datasets of the enabled connectors, for the SQL tools (docs/design.md §6).
 
-Connectors and datasets are extensions (extensions/connectors/<name>/: connector.md, datasets/*.md; loaded by
+Connectors and datasets are extensions (extensions/connectors/<name>/: connector.py, datasets/*.md; loaded by
 agent/connectors). Each query runs on the one connector that holds its datasets, signed in as the user when the
 connector needs it. Data sources are remote and read-only: the agent never loads, uploads or writes anything.
 
@@ -32,7 +32,7 @@ _FILTERS = (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE, exp.In, exp.Betwe
 
 
 def dialect_of(connector) -> str:
-    """The connector's SQL dialect for sqlglot (`dialect` in connector.md, e.g. trino, tsql, oracle); local data is
+    """The connector's SQL dialect for sqlglot (DIALECT in connector.py, e.g. trino, tsql, oracle); local data is
     SQLite; "" is sqlglot's generic SQL."""
     return connector.setting("dialect", "sqlite" if connector.kind in ("sqlite", "mock") else "")
 

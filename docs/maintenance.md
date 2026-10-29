@@ -70,9 +70,9 @@ A connector is one connection (a server, a database); a dataset is one table or 
 
 **A new connector** (once per data source):
 1. `python scripts/gpt_pack.py connector "Add a connector for <server>: <driver>, users sign in with their own ID" --out pack.md`
-2. Save `extensions/connectors/<name>/connector.md`. Use a built-in kind (`odbc` for most servers). Set the
-   settings it names, e.g. the environment variable with the connection string without user or password.
-3. Restart the UI: with `needs_login: yes` the sidebar shows **Data sign-in: <name>**. Sign in and check that
+2. Save `extensions/connectors/<name>/connector.py`. Use a built-in kind (`odbc` for most servers), with
+   `CONNECTION_STRING` (driver, server, port, database; never a user or password).
+3. Restart the UI: with `NEEDS_LOGIN = True` the sidebar shows **Data sign-in: <name>**. Sign in and check that
    **Datasets** lists nothing yet (no dataset files) and no "Extension not loaded" warning appears.
 
 **A new dataset** (one per table):
@@ -132,7 +132,7 @@ Useful files in `runs/<run id>/`: `log.jsonl` (every model and tool call, with p
 | `MODEL_MEMORY` | `session` if the wrapper has `channel` | Send fixed prompt parts once per instance (docs/design.md §4a); `off` sends everything each call |
 | `MEMORY_REFRESH_TOKENS` | `20000` | Session mode: re-send everything after this much text (lower it if answers drift after compression) |
 | `CONNECTORS` | e.g. `lake_odbc` | The connectors to enable (default: every folder in `extensions/connectors/`; leave out `sample_lake` in production) |
-| `LAKE_ODBC` (or the name in a connector's `connection_env`) | your driver, server, port, database | An `odbc` connector's connection string without the sign-in (UID/PWD come from each user's sign-in) |
+| `CONNECTOR_<NAME>_CONNECTION_STRING` | your driver, server, port, database | Overrides an `odbc` connector's `CONNECTION_STRING` (never with UID/PWD: those come from each user's sign-in) |
 | `AGENT_HOME` | project folder | Where `runs/`, `sandbox/` and `settings/` live |
 | `AGENT_EXTENSIONS` (`AGENT_SKILLS`, `AGENT_TOOLKITS`, `AGENT_EXAMPLES`) | default `extensions/...` | Point to another folder of extensions (or one type) |
 | `BASIC_TOOLKITS` | e.g. `files,analysis,datalake,docs` | Toolkits on when a session starts |
@@ -153,7 +153,7 @@ Check that `python scripts/smoke_model.py --backend prod` passes after any chang
 | Suggests the wrong skill | the planner reply in `log.jsonl` | Sharpen `when_to_use`; add a counter-example (D) |
 | "File not found" for a file the user attached | the tool error lists the exact names | The name has a space or typo; it must be copied exactly (already in the prompts) |
 | The reviewer keeps rejecting a good answer | `review` events | Check the cited outputs hold the numbers; a skill check may be too strict |
-| An extension does not appear | UI warning "Extension not loaded" | The error is shown (import error, broken front matter, a dataset name used twice); fix and restart |
+| An extension does not appear | UI warning "Extension not loaded" | The error is shown (import error in connector.py, broken dataset front matter, a dataset name used twice); fix and restart |
 | Every call fails | `scripts/smoke_model.py --backend prod` | The wrapper module or the API; nothing in skills |
 | "Not signed in to <connector>" / "Sign-in failed" | the sidebar's Data sign-in | Sign in again (sign-ins are memory only and end with the session); check the account |
 | "This query reads datasets of several connectors" | the SQL | Query each connector separately and combine the extracts with run_python (say so in the skill) |

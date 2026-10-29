@@ -2,7 +2,7 @@
 
 Four types, one folder each. Copy the template (names starting with `_` are never loaded), fill it in, restart.
 
-- `connectors/<name>/` — one connection to a data source: `connector.md` (kind, sign-in, settings) and
+- `connectors/<name>/` — one connection to a data source: `connector.py` (kind, sign-in, connection string) and
   `datasets/<dataset>.md`, one file per table or view. Template: `connectors/_template/`.
 - `skills/<name>.md` — Markdown recipes (steps, checks, output) that may use datasets of several connectors.
   Template: `skills/_template.md`.
