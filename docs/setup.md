@@ -135,7 +135,8 @@ When a real API is provided, the swap is a setting; nothing else changes.
 | `MOCK_LAKE_USERS` | none | mock server: `user:password,...` synthetic test accounts for per-user sign-in |
 | `AGENT_EXTENSIONS` | `extensions/` | extensions folder (connectors/, skills/, toolkits/, examples/); `AGENT_SKILLS`, `AGENT_TOOLKITS`, `AGENT_EXAMPLES` point one type elsewhere |
 | `BASIC_TOOLKITS` | (marked basic) | comma-separated toolkits on when a session starts |
-| `AGENT_MAX_STEPS` | `15` | tool steps per instruction |
+| `AGENT_MAX_STEPS` | `15` | tool steps per instruction, at least |
+| `AGENT_STEPS_PER_PLAN_STEP` | `3` | a longer plan gets this many steps per plan step |
 | `SQL_TIMEOUT_S` | `900` | longest a lake query may run (15 minutes) |
 | `TOOL_TIMEOUT_S` | `30` | time limit for every other tool call |
 | `AGENT_HOME` | project folder | where `runs/` and `sandbox/` live |

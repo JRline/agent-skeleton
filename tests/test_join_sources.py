@@ -45,6 +45,20 @@ RATIO = ("m = tables['map']\n"
          "r['rwa_per_es'] = (r['market_rwa'] / r['es']).round(2)\n"
          "result = r.sort_values('rwa_per_es', ascending=False).reset_index(drop=True)\n"
          "notes = f\"{len(r)} desks matched of {len(tables['rwa'])} products with market RWA\"")
+USAGE = (f"SELECT product_id, location, scenario, SUM(amount) AS amount FROM usage_limits "
+         f"WHERE {STD} AND resource = 'RWA' AND as_of_date = '{DATE}' GROUP BY product_id, location, scenario")
+THREE = ("u = tables['usage'].pivot_table(index=['product_id', 'location'], columns='scenario', values='amount',\n"
+         "                                 aggfunc='sum').reset_index()\n"
+         "u.columns = ['product_id', 'location', 'rwa_limit', 'rwa_usage']\n"
+         "m = tables['map']\n"
+         "c = tables['credit'].merge(m[m.source_system == 'credit'], left_on='portfolio_code', right_on='source_code')\n"
+         "c = c.groupby(['product_id', 'location'], as_index=False)['credit_rwa'].sum()\n"
+         "e = tables['es'].merge(m[m.source_system == 'market'], left_on='desk_code', right_on='source_code')\n"
+         "e = e.groupby(['product_id', 'location'], as_index=False)['es'].sum()\n"
+         "r = u.merge(c, on=['product_id', 'location'], how='left').merge(e, on=['product_id', 'location'], how='left')\n"
+         "r['credit_share_pct'] = (100 * r['credit_rwa'] / r['rwa_usage']).round(2)\n"
+         "result = r.sort_values(['product_id', 'location']).reset_index(drop=True)\n"
+         "notes = f\"{len(r)} keys; credit found for {r['credit_rwa'].notna().sum()}, ES for {r['es'].notna().sum()}\"")
 
 
 def saved(msgs, n=1):
@@ -132,3 +146,24 @@ class JoinConversations(TempDirs):
         out = self.replay(state)
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
         self.assertEqual(out.stdout.count("MATCH"), 3)
+
+    def test_three_datasets_over_two_connectors_join_into_one_table(self):
+        """usage_limits and credit_exposures (sample_lake) and desk_risk (market_lake), keyed together by the
+        user's mapping: usage and limit, the credit part of usage, and the desk's ES, per product and location."""
+        state = self.converse("RWA usage, credit RWA and ES by product and location",
+                              [("usage", USAGE), ("credit", CREDIT), ("es", ES)], THREE,
+                              lambda msgs: "Usage, credit RWA and ES by product and location [ref: run_python-4].")
+        r = self.result(state, "run_python-4")
+        credit, _ = datalake.get_lake(None, "sample_lake").query(CREDIT)
+        es, _ = datalake.get_lake(None, "market_lake").query(ES)
+        self.assertEqual(float(r["credit_rwa"].sum()), float(credit["credit_rwa"].sum()))   # nothing lost in the join
+        self.assertAlmostEqual(float(r["es"].sum()), float(es["es"].sum()), places=6)
+        self.assertEqual(int(r["es"].notna().sum()), len(es))                              # every desk found its key
+        self.assertTrue((r["rwa_usage"] <= r["rwa_limit"] * 1.5).all())
+        self.assertTrue((r["credit_share_pct"].dropna() <= 100).all())        # credit is a part of the usage
+        text = replay.build_script(state)
+        self.assertEqual(text.count("run_sql(SQL, 'sample_lake')"), 2)
+        self.assertEqual(text.count("run_sql(SQL, 'market_lake')"), 1)
+        out = self.replay(state)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertEqual(out.stdout.count("MATCH"), 4)

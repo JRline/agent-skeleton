@@ -91,7 +91,7 @@ def make_plan(planner, goal: str, inputs: list[str], toolkits: list[str], v: dic
     except UNUSABLE as e:
         log(v, "warning", text=f"Planner failed ({e}); using the goal as a single step.")
         return [goal], None, ""
-    suggestion = checks._suggestion({"toolkits": toolkits}, parsed) if suggest else None
+    suggestion = checks._suggestion({"toolkits": toolkits, "goal": goal}, parsed) if suggest else None
     # Drop placeholders copied from the prompt's shape example ("<step>") and a copied tool list.
     steps = [s.strip() for s in parsed.plan if s.strip() and not re.fullmatch(r"<[^>]*>", s.strip())][:7]
     if steps and all(s in TOOLS for s in steps):
@@ -263,6 +263,8 @@ def compact(messages: list, keep: int | None = None) -> list:
             try:
                 obs = json.loads(m.content)
                 line = str(obs.get("result") or obs.get("error") or "").split("\n", 1)[0][:200]
+                if m.name == "describe_dataset" and obs.get("ok"):
+                    line = _dataset_essentials(str(obs.get("result") or "")) or line
                 text = json.dumps({"ok": obs.get("ok"), "ref": obs.get("ref"),
                                    "result": f"{line} …[earlier result, shortened; cite its ref]"}, ensure_ascii=False)
             except (ValueError, AttributeError):
@@ -270,6 +272,16 @@ def compact(messages: list, keep: int | None = None) -> list:
             m = m.model_copy(update={"content": text})
         out.append(m)
     return out
+
+
+_ESSENTIAL = ("## ", "Required filter", "Default filters", "columns:", "partitions")
+
+
+def _dataset_essentials(doc: str) -> str:
+    """What SQL needs from a dataset's documentation (name, required and default filters, columns, partitions).
+    A join over several datasets outlives the last few full results, and with only the first line left small
+    models spent their step budget searching for column names again."""
+    return "\n".join(line for line in doc.splitlines() if line.startswith(_ESSENTIAL))
 
 
 class SessionPrompt(AgentMiddleware):

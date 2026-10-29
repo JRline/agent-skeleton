@@ -64,6 +64,17 @@ class Suggestions(LakeOff):
         self.assertIn("datalake", prompt)                     # other toolkits and skills are offered
         self.assertIn("usage_comparison", prompt)
 
+    def test_a_skill_is_not_suggested_for_a_dataset_it_does_not_cover(self):
+        """A usage_limits skill cannot reconcile usage_limits with credit_exposures; a general skill still may be."""
+        m = FakeModel({"planner": [j(plan=["Query both"], suggest={"skill": "limit_status"}),
+                                   j(plan=["Summarise"], suggest={"skill": "file_summary"})]})
+        state = new_state("Reconcile credit_exposures to usage_limits", toolkits=["datalake", "analysis"])
+        run_one_step(state, m)
+        self.assertEqual((state["status"], state["skill"]), ("running", None))
+        state = new_state("Summarise credit_exposures for me", toolkits=["datalake", "analysis"])
+        run_one_step(state, m)
+        self.assertEqual(state["status"], "awaiting_choice")
+
     def test_accepting_the_skill_uses_its_steps_and_toolkits(self):
         state, _, _ = self.suggest(skill="usage_comparison", toolkits=["datalake"])
         resolve_pending(state, choice={"skill": "usage_comparison", "toolkits": ["datalake"]})

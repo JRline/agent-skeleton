@@ -76,9 +76,22 @@ def _suggestion(state: dict, parsed: _Plan) -> dict | None:
     raw = parsed.suggest or {}
     toolkits = [t for t in raw.get("toolkits") or [] if t in TOOLKITS and t not in state["toolkits"]]
     skill = get_skill(raw.get("skill") or parsed.skill)
+    if skill and _datasets_outside(skill, state.get("goal", "")):
+        skill = None
     if not (toolkits or skill):
         return None
     return {"toolkits": toolkits, "skill": skill.name if skill else None, "why": str(raw.get("why", ""))[:300]}
+
+
+def _datasets_outside(skill, goal: str) -> list[str]:
+    """Datasets the request names that a skill written for certain datasets does not cover. Such a skill's steps
+    cannot answer it (e.g. a usage_limits skill offered for a reconciliation with credit_exposures), so it is not
+    suggested; a general skill (no datasets) always may be."""
+    if not getattr(skill, "datasets", None):
+        return []
+    from . import connectors
+    named = [d for d in connectors.datasets() if re.search(rf"\b{re.escape(d)}\b", goal, re.I)]
+    return [d for d in named if d not in skill.datasets]
 
 
 def _enabled_by_toolkit(state: dict) -> str:

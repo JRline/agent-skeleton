@@ -88,8 +88,10 @@ def run_one_step(state: dict, model) -> dict:
         return event(state, status, final=state.get("final"))
     if status in WAITING:
         return event(state, status, **(state["pending"] or {}))   # wait for the human
-    if state["step_count"] - state.get("task_start", 0) >= config.MAX_STEPS:
-        return abort(state, f"Reached the step limit ({config.MAX_STEPS}).")
+    budget = config.step_budget(state.get("plan"))
+    if state["step_count"] - state.get("task_start", 0) >= budget:
+        return abort(state, f"Reached the step limit ({budget} steps for a {len(state.get('plan') or [])}-step "
+                            "plan). Send a follow-up instruction to carry on from the results so far.")
     graph = _ACTIVE[state["run_id"]] = graph_for(model)
     if state.get("start"):
         payload = _start_payload(state)

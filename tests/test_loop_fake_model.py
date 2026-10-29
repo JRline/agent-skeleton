@@ -196,15 +196,29 @@ class Recovery(LoopCase):
         self.assertEqual(m.efforts("executor"), ["none", "none", "none", "medium"])
 
     def test_step_limit(self):
-        old = config.MAX_STEPS
-        config.MAX_STEPS = 2
+        old = config.MAX_STEPS, config.STEPS_PER_PLAN_STEP
+        config.MAX_STEPS, config.STEPS_PER_PLAN_STEP = 2, 0
         try:
             m = model([READ, LOOKUP, final()])
             state = run("goal", m)
         finally:
-            config.MAX_STEPS = old
+            config.MAX_STEPS, config.STEPS_PER_PLAN_STEP = old
         self.assertEqual(state["status"], "aborted")
         self.assertIn("step limit", state["events"][-1]["payload"]["reason"])
+        self.assertIn("follow-up instruction", state["events"][-1]["payload"]["reason"])
+
+    def test_a_longer_plan_gets_more_steps(self):
+        """A join over several datasets needs more steps than a one-table question."""
+        old = config.MAX_STEPS, config.STEPS_PER_PLAN_STEP
+        config.MAX_STEPS, config.STEPS_PER_PLAN_STEP = 2, 1
+        try:
+            short = run("goal", model([READ, LOOKUP, final()], planner=[j(plan=["Do it"])]))
+            long = run("goal", model([READ, LOOKUP, final()], planner=[j(plan=["Read", "Look up", "Answer"])]))
+        finally:
+            config.MAX_STEPS, config.STEPS_PER_PLAN_STEP = old
+        self.assertEqual(short["status"], "aborted")
+        self.assertEqual(long["status"], "finished")
+        self.assertEqual(config.step_budget(["a"] * 7), max(config.MAX_STEPS, 7 * config.STEPS_PER_PLAN_STEP))
 
     def test_planner_failure_falls_back_to_goal(self):
         m = model([final()], planner=["x"] * 4)
@@ -483,6 +497,21 @@ class LeanPrompts(LoopCase):
         self.assertIn("head line", out[0].content)
         self.assertEqual([m.content for m in out[2:]], [m.content for m in big[2:]])
         self.assertGreater(len(big[0].content), 2000)                  # the graph's own copy stays whole
+
+    def test_an_old_dataset_description_keeps_what_sql_needs(self):
+        """Filters and columns survive shortening, so a join over several datasets does not look them up again."""
+        from agent import connectors
+        from agent.graph import compact
+        from langchain_core.messages import ToolMessage
+        doc = connectors.dataset_doc("usage_limits") + "\n\ncolumns: partition_key, as_of_date, amount"
+        msgs = [ToolMessage(json.dumps({"ok": True, "ref": "describe_dataset-1", "result": doc}), tool_call_id="0",
+                            name="describe_dataset")]
+        msgs += [ToolMessage(json.dumps({"ok": True, "ref": f"read_file-{i}", "result": "x" * 2000}),
+                             tool_call_id=str(i)) for i in range(1, 4)]
+        out = json.loads(compact(msgs, keep=3)[0].content)["result"]
+        self.assertLess(len(out), len(doc) / 2)
+        for part in ("## usage_limits", "Required filter: `partition_key`", "Default filters:", "columns: partition_key"):
+            self.assertIn(part, out)
 
     def test_checkers_do_not_get_the_dictionary_twice(self):
         from agent.checks import _view_docs

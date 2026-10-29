@@ -356,7 +356,7 @@ if s:
             rename(s, new_title)
             st.rerun()
     st.caption(f"`{s['run_id']}` · status **{s['status']}** · "
-               f"steps {s['step_count'] - s.get('task_start', 0)}/{config.MAX_STEPS} · "
+               f"steps {s['step_count'] - s.get('task_start', 0)}/{config.step_budget(s.get('plan'))} · "
                f"backend {getattr(model, 'name', backend)} · tools: {', '.join(s.get('toolkits', []))}"
                + (f" · skill `{s['skill']}`" if s.get("skill") else ""))
 

@@ -156,7 +156,9 @@ from the connector's optional `sample.py` (git-ignored `data/`, never inside `sa
 - Join test data (2026-10-29): `credit_exposures` (sample_lake) and `desk_risk` (new `market_lake` connector) are keyed
   by their own codes and join to `usage_limits` through `inputs/book_mapping.csv` in run_python. Live Haiku runs of
   both joins finished correctly (credit reconciles to 0 on 30 keys; market replay MATCHes on two sources).
-  309 unit tests pass.
+  Then: a three-dataset join test; the step budget scales with the plan (3 per plan step, at least 15); old
+  dataset descriptions keep filters and columns; a dataset skill is not suggested for datasets it does not cover.
+  Live Haiku: the credit reconciliation (12 steps) and the three-dataset join (10 steps) finish. 313 unit tests pass.
 
 ## Next tasks, in order
 1. Pin `requirements.txt` to production's exact Python and package versions (ask the owner). The grid number

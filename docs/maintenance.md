@@ -136,7 +136,8 @@ Useful files in `runs/<run id>/`: `log.jsonl` (every model and tool call, with p
 | `AGENT_HOME` | project folder | Where `runs/`, `sandbox/` and `settings/` live |
 | `AGENT_EXTENSIONS` (`AGENT_SKILLS`, `AGENT_TOOLKITS`, `AGENT_EXAMPLES`) | default `extensions/...` | Point to another folder of extensions (or one type) |
 | `BASIC_TOOLKITS` | e.g. `files,analysis,datalake,docs` | Toolkits on when a session starts |
-| `AGENT_MAX_STEPS` | `15` | Tool steps per instruction before it stops |
+| `AGENT_MAX_STEPS` | `15` | Tool steps per instruction before it stops (at least; longer plans get more) |
+| `AGENT_STEPS_PER_PLAN_STEP` | `3` | Steps per plan step, so a 7-step plan gets 21 |
 | `SQL_TIMEOUT_S` | `900` | Longest a lake query may run (15 minutes); set the lake driver's timeout to match |
 | `TOOL_TIMEOUT_S` | `30` | Time limit for every other tool call |
 

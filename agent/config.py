@@ -55,7 +55,10 @@ EXAMPLES_DIR = Path(os.getenv("AGENT_EXAMPLES", EXTENSIONS_DIR / "examples"))
 BASIC_TOOLKITS = [t for t in os.getenv("BASIC_TOOLKITS", "").split(",") if t]
 
 # ---------------------------------------------------------------- limits
-MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "15"))   # executor steps per run
+MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "15"))   # executor steps per instruction, at least (step_budget)
+# A longer plan gets more steps: a join over three datasets needs a description, a query and a check per dataset,
+# and failed under a flat 15. The planner keeps plans to 7 steps, so the budget is at most 21 by default.
+STEPS_PER_PLAN_STEP = int(os.getenv("AGENT_STEPS_PER_PLAN_STEP", "3"))
 MAX_REPAIRS = 2                 # JSON repair attempts at effort "none" before escalating
 MAX_REVIEW_ROUNDS = 2
 MAX_ACTION_REJECTIONS = 2       # requests sent back before the user is asked anyway (with the reviewer's notes)
@@ -96,6 +99,11 @@ EFFORT = {
     "action_review": "medium",      # a data read or analysis request, checked before the user is asked
     "finisher": "medium",           # one direct request for the answer when the executor is stuck
 }
+
+
+def step_budget(plan: list | None) -> int:
+    """Tool steps an instruction may take: MAX_STEPS, or more for a longer plan."""
+    return max(MAX_STEPS, STEPS_PER_PLAN_STEP * len(plan or []))
 
 
 def inputs_dir() -> Path:

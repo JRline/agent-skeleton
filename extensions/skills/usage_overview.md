@@ -3,7 +3,7 @@ name: usage_overview
 description: High-level summary of the usage_limits dataset (RWA and leverage usage and limits) for an analyst - what it holds, the filters needed for correct numbers, which dates are loaded for each resource and version, the hierarchy outline, and current totals. Two small queries at most.
 toolkits: datalake, analysis
 datasets: usage_limits
-when_to_use: Only when the user asks to profile, summarise or describe the usage_limits dataset itself - what it contains, how to query it correctly, which dates are loaded. Not for questions about values in it (totals, breakdowns, changes, limits, breaches), and not for an attached or local file (use file_summary).
+when_to_use: Only when the user asks to profile, summarise or describe the usage_limits dataset itself - what it contains, how to query it correctly, which dates are loaded. Not for questions about values in it (totals, breakdowns, changes, limits, breaches), not for exporting its rows to a file (export_query), and not for an attached or local file (use file_summary).
 ---
 ## Steps
 1. describe_dataset for the dataset: it gives the grain, the required filters and their values, the hierarchies, the measures and the partitions (partition_key). Most of the summary comes from here, with no query.

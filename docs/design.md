@@ -468,7 +468,7 @@ and keep names distinct.
 |---|---|---|
 | System prompt | rules and the enabled toolkits' rules (`prompts/system.md`); the accepted skill and its reference documents, or the plan; the current step; other toolkits as one line each | every model call (`graph.system_prompt` via `SessionPrompt`), one `## ` block each; the chat model adds the full tool list (enabled toolkits only) and the reply protocol |
 | Instruction | goal (or follow-up with earlier instructions), input files, the user's own context docs | the first message of each instruction (`graph.intro`) |
-| Conversation | tool calls, observations, feedback, the user's answers and rejection reasons | the graph's `messages`, checkpointed. The model sees the last `KEEP_FULL_RESULTS` (3) tool results and calls in full, older results as one line with their ref and older calls with the start of their SQL / code (`graph.compact`); past `PROMPT_BUDGET_TOKENS` `SummarizationMiddleware` folds old messages into a summary |
+| Conversation | tool calls, observations, feedback, the user's answers and rejection reasons | the graph's `messages`, checkpointed. The model sees the last `KEEP_FULL_RESULTS` (3) tool results and calls in full, older results as one line with their ref (a `describe_dataset` result keeps its heading, required and default filters, columns and partitions, which a join over several datasets still needs) and older calls with the start of their SQL / code (`graph.compact`); past `PROMPT_BUDGET_TOKENS` `SummarizationMiddleware` folds old messages into a summary |
 | Context docs | user's definitions / methodology (`state.context`); a skill's references | the user's: small ones inline in the instruction (≤ `CONTEXT_INLINE_TOKENS`), larger via `search_docs`; a skill's: in the system prompt once the skill is accepted |
 | Facts | one line per tool result, the user's answers (whole) and rejection reasons, with refs | the conversation record; given to the request reviewer, answer reviewer and finisher |
 | Long-term | full tool outputs, logs, documents | only via `recall` / `read_file` / cited outputs |
@@ -573,8 +573,10 @@ same way, before the reviewer and before the user. The review of the final answe
 in results.
 
 ### Stop conditions
-An answer accepted by the checks · `MAX_STEPS` tool steps per instruction (default 15, counted by the driver) ·
-repeated action (finisher, else abort) · user abort.
+An answer accepted by the checks · the step budget per instruction, counted by the driver:
+`config.step_budget(plan)` = max(`MAX_STEPS` (15), `STEPS_PER_PLAN_STEP` (3) x plan steps), so a 7-step join plan
+gets 21; the stop message says a follow-up instruction carries on from the results so far · repeated action
+(finisher, else abort) · user abort.
 
 A backend failure (model unreachable after the adapter's retries, or replies that stay outside the protocol after
 the repairs) is not a stop: the step records a `model_error` event, and retrying resumes the graph from its last
@@ -617,7 +619,8 @@ Log the effort and latency of every call so the policy can be tuned with data. A
 - **planner.md**: "Break the goal into the fewest steps: 1–7, a simple question needs one. Plain-word actions,
   not tool names." Shape-only example `{"plan": ["<step>", ...]}`. `plan()` drops copied `<step>` placeholders
   and rejects a plan made only of tool names; then the goal is the single step. It must not plan steps that
-  re-check extracted data with another query, and suggests a skill only when the goal asks for what it produces.
+  re-check extracted data with another query, and suggests a skill only when the goal asks for what it produces. A skill written for certain datasets is never suggested
+  for a request that names a dataset it does not cover (`checks._datasets_outside`).
 - **reviewer.md**: "Check FINAL against GOAL and this checklist: complete, consistent with facts,
   numbers traceable to refs, no unsupported claims. Output `{\"ok\": bool, \"issues\": [...]}`."
   It also gets the CONTEXT, the active skill's checks, and the full stored output (with the tool input) of
