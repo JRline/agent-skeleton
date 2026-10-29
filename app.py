@@ -7,6 +7,7 @@ message continues it (`continue_with`), keeping earlier results.
 from __future__ import annotations
 
 import difflib
+import inspect
 import json
 import secrets
 import os
@@ -29,7 +30,8 @@ from agent.skills import get_skill, list_skills
 from agent.pysandbox import normalize_code
 from agent.tools import step_summary
 from agent.ui import results_page
-from agent.ui.sources import render_answer, show_output
+from agent.ui.results_page import STRETCH
+from agent.ui.sources import render_answer, scroll_code, show_output
 from agent.sqlfmt import format_sql
 from agent.export import build_html
 from agent.replay import build_script, has_steps
@@ -44,6 +46,23 @@ st.markdown("""<style>
   padding: 0.75rem 1rem; border-radius: 0.5rem; }
 .req-mark, .ans-mark { display: block; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.75; }
 </style>""", unsafe_allow_html=True)
+
+# Partial reruns (docs/design.md §12): a click redraws only its own part of the page where it can. Each feature is
+# detected, so an older Streamlit falls back to full reruns with the same behaviour.
+fragment = getattr(st, "fragment", None) or (lambda func: func)          # st.fragment: Streamlit 1.37+
+_LAZY = "on_change" in inspect.signature(st.expander).parameters        # an expander that knows it is open
+NO_RERUN = ({"on_change": "ignore"} if '"ignore"' in (st.number_input.__doc__ or "")
+            else {})                                                     # sent with the next action, not on typing
+
+
+def lazy_expander(label: str, key: str):
+    """An expander whose body is built only while it is open (closed ones cost nothing on a rerun). Returns the
+    expander and whether to build its body."""
+    if not _LAZY:
+        return st.expander(label), True
+    box = st.expander(label, key=key, on_change="rerun")
+    return box, bool(box.open)
+
 
 if st.query_params.get("results"):                  # the Results view, opened in a new tab on request
     results_page.render(st.query_params["results"])
@@ -168,6 +187,7 @@ def lend_sign_ins(key: str) -> None:
     ss.lake_runs = list(dict.fromkeys(ss.get("lake_runs", []) + [key]))
 
 
+@fragment
 def connector_sign_in(name: str) -> None:
     """User ID and password for a connector that needs the user's own sign-in. Kept in this session's memory only
     (never saved, logged or shown to the model); the password field is cleared as soon as the form is sent."""
@@ -175,7 +195,9 @@ def connector_sign_in(name: str) -> None:
     with st.expander(f"Data sign-in: {name}", expanded=login is None):
         if login is not None:
             st.success(f"Signed in as {login.user}")
-            st.button("Sign out", key=f"sign_out_{name}", on_click=sign_out, args=(name,))
+            if st.button("Sign out", key=f"sign_out_{name}"):
+                sign_out(name)
+                st.rerun()
             return
         with st.form(f"sign_in_{name}", clear_on_submit=True):
             user = st.text_input("User ID", key=f"user_{name}")
@@ -197,6 +219,64 @@ def connector_sign_in(name: str) -> None:
                 credentials.forget(key)
             ss.setdefault("lake_logins", {})[name] = candidate
             st.rerun()
+
+
+@fragment
+def conversation_picker() -> None:
+    """Choosing a conversation redraws only this; opening it redraws the page."""
+    convs = list_conversations()
+    titles = {c["run_id"]: c["title"] for c in convs}
+    st.selectbox("Conversations", [""] + [c["run_id"] for c in convs], key="resume_id",
+                 format_func=lambda r: titles.get(r, r) if r else "Choose a conversation")
+    if st.button("Open", key="resume", disabled=not ss.get("resume_id")):
+        open_conversation()
+        st.rerun()
+
+
+@fragment
+def datasets_list() -> None:
+    """Asks the data sources only while open."""
+    box, is_open = lazy_expander("Datasets", key="datasets_open")
+    if not is_open:
+        return
+    with box:
+        key = "view-" + ss.setdefault("lake_key", secrets.token_hex(8))
+        lend_sign_ins(key)
+        for name, conn in connectors.enabled().items():
+            st.caption(f"{name} ({conn.kind})")
+            try:
+                st.markdown("\n".join(f"- `{d}`" for d in get_lake(key, name).list_datasets()) or "No datasets.")
+            except Exception as e:
+                st.caption(f"Not available: {credentials.scrub(str(e))}")
+
+
+@fragment
+def prompt_settings() -> None:
+    """Role, answer style and templates: read only while open; typing sends nothing until Save."""
+    box, is_open = lazy_expander("Prompt settings", key="prompt_settings_open")
+    if not is_open:
+        return
+    with box:
+        prefs = settings.load()
+        role = st.text_area("Role", value=prefs["role"], key="pref_role", height=80,
+                            placeholder="e.g. You are a regulatory capital analyst.", **NO_RERUN)
+        style = st.text_area("Answer style", value=prefs["style"], key="pref_style", height=80,
+                             placeholder="e.g. English, concise, amounts in JPY bn, tables for numbers.", **NO_RERUN)
+        if st.button("Save role and style", key="pref_save"):
+            settings.save_role_style(role, style)
+            st.success("Saved. Used from the next model call.")
+        if st.checkbox("Edit prompt templates (advanced)", key="pref_advanced"):
+            name = st.selectbox("Template", settings.EDITABLE, key="pref_template")
+            text = st.text_area("Template text", value=settings.template(name), key=f"pref_text_{name}",
+                                height=320, help="Keep every {{placeholder}}; the agent fills them in.", **NO_RERUN)
+            c1, c2 = st.columns(2)
+            if c1.button("Save template", key="pref_template_save"):
+                problem = settings.save_template(name, text)
+                st.error(problem) if problem else st.success("Template saved.")
+            if c2.button("Reset to default", key="pref_template_reset"):
+                settings.reset_template(name)
+                ss.pop(f"pref_text_{name}", None)
+                st.rerun()
 
 
 def stop_run() -> None:
@@ -235,19 +315,24 @@ def approval_target(inp: dict) -> str:
     return f"→ `{name}`" if name else ""
 
 
+@fragment
 def render_model_calls(state: dict) -> None:
-    with st.expander("Model calls (effort and latency)"):
+    """Read from the log only while open; opening it or showing raw replies redraws this section alone."""
+    box, is_open = lazy_expander("Model calls (effort and latency)", key="model_calls_open")
+    if not is_open:
+        return
+    with box:
         calls = [e for e in read_log(state) if e["kind"] == "model"]
         if calls:
             st.dataframe([{k: c.get(k) for k in ("step", "purpose", "effort", "backend", "model",
                                                   "prompt_tokens", "latency_ms", "error")}
-                          for c in calls], use_container_width=True)
+                          for c in calls], **STRETCH)
             # Off by default: raw replies are long and only needed when comparing models.
             if st.checkbox("Show raw model replies", key="show_raw"):
                 for i, c in enumerate(calls, 1):
                     st.caption(f"{i}. step {c.get('step')} · {c.get('purpose')} · effort {c.get('effort')}"
                                f" · {c.get('model') or c.get('backend')} · {c.get('latency_ms')} ms")
-                    st.code(c.get("output") or c.get("error") or "(empty)", language="json")
+                    scroll_code(c.get("output") or c.get("error") or "(empty)", "json")
         else:
             st.caption("No model calls yet.")
 
@@ -267,11 +352,7 @@ if s and needs_login():                  # this conversation's queries use this 
 # ---------------------------------------------------------------- sidebar
 with st.sidebar:
     st.button("New conversation", key="new_conversation", on_click=new_conversation, type="primary")
-    convs = list_conversations()
-    titles = {c["run_id"]: c["title"] for c in convs}
-    st.selectbox("Conversations", [""] + [c["run_id"] for c in convs], key="resume_id",
-                 format_func=lambda r: titles.get(r, r) if r else "Choose a conversation")
-    st.button("Open", key="resume", disabled=not ss.get("resume_id"), on_click=open_conversation)
+    conversation_picker()
     if s and s["status"] not in DONE:
         st.button("Stop", key="stop", on_click=stop_run)
     if s and s.get("results"):
@@ -297,7 +378,7 @@ with st.sidebar:
         pick_claude_model()
     ss.autorun = st.toggle("Auto-run steps", value=ss.autorun, key="autorun_toggle")
     st.number_input("Step limit per instruction", min_value=0, max_value=config.MAX_STEPS_LIMIT, step=1,
-                    key="max_steps",
+                    key="max_steps", **NO_RERUN,
                     help=f"Tool steps the agent may take for one instruction; applies from your next message. "
                          f"0 = automatic: {config.MAX_STEPS}, or {config.STEPS_PER_PLAN_STEP} per plan step for a "
                          f"longer plan. If it stops at the limit, raise this and send a follow-up to carry on.")
@@ -316,38 +397,10 @@ with st.sidebar:
     if "datalake" in ss.session_toolkits:
         for name in needs_login():
             connector_sign_in(name)
-        with st.expander("Datasets"):
-            key = "view-" + ss.setdefault("lake_key", secrets.token_hex(8))
-            lend_sign_ins(key)
-            for name, conn in connectors.enabled().items():
-                st.caption(f"{name} ({conn.kind})")
-                try:
-                    st.markdown("\n".join(f"- `{d}`" for d in get_lake(key, name).list_datasets()) or "No datasets.")
-                except Exception as e:
-                    st.caption(f"Not available: {credentials.scrub(str(e))}")
+        datasets_list()
     for err in extensions.ERRORS + connectors.ERRORS:
         st.warning(f"Extension not loaded: {err}")
-    with st.expander("Prompt settings"):
-        prefs = settings.load()
-        role = st.text_area("Role", value=prefs["role"], key="pref_role", height=80,
-                            placeholder="e.g. You are a regulatory capital analyst.")
-        style = st.text_area("Answer style", value=prefs["style"], key="pref_style", height=80,
-                             placeholder="e.g. English, concise, amounts in JPY bn, tables for numbers.")
-        if st.button("Save role and style", key="pref_save"):
-            settings.save_role_style(role, style)
-            st.success("Saved. Used from the next model call.")
-        if st.checkbox("Edit prompt templates (advanced)", key="pref_advanced"):
-            name = st.selectbox("Template", settings.EDITABLE, key="pref_template")
-            text = st.text_area("Template text", value=settings.template(name), key=f"pref_text_{name}",
-                                height=320, help="Keep every {{placeholder}}; the agent fills them in.")
-            c1, c2 = st.columns(2)
-            if c1.button("Save template", key="pref_template_save"):
-                problem = settings.save_template(name, text)
-                st.error(problem) if problem else st.success("Template saved.")
-            if c2.button("Reset to default", key="pref_template_reset"):
-                settings.reset_template(name)
-                ss.pop(f"pref_text_{name}", None)
-                st.rerun()
+    prompt_settings()
     st.button("End session", key="end_session", on_click=end_session,
               help="Reset tools to the basic set and the skill to Auto. Conversations stay saved.")
 
@@ -436,10 +489,12 @@ def render_event(ev: dict, verbose: bool) -> None:
             if verbose:
                 if p.get("thought"):
                     st.caption(p["thought"])
+                st.caption("Input")
                 if p["input"].get("sql"):
-                    st.code(format_sql(p["input"]["sql"]), language="sql")
+                    scroll_code(format_sql(p["input"]["sql"]), "sql")
                 else:
-                    st.code(json.dumps(p["input"], indent=2), language="json")
+                    scroll_code(json.dumps(p["input"], indent=2), "json")
+                st.caption("Output")
                 show_output(str(p["obs"].get("result") or p["obs"].get("error")))
         elif kind == "precheck":
             st.markdown(f"🔍 Reviewer sent the `{p['tool']}` request back to the agent before asking you")
@@ -469,10 +524,10 @@ def render_event(ev: dict, verbose: bool) -> None:
         elif kind == "approval":
             st.markdown(f"**Approval requested:** `{p['tool']}` {approval_target(p['input'])}")
             if verbose:
-                st.code(json.dumps(p["input"], indent=2), language="json")
+                scroll_code(json.dumps(p["input"], indent=2), "json")
             else:
                 with section("Details"):
-                    st.code(json.dumps(p["input"], indent=2), language="json")
+                    scroll_code(json.dumps(p["input"], indent=2), "json")
         elif kind == "ask_user":
             st.markdown(f"**Question:** {p['question']}")
         elif kind == "user":
@@ -485,6 +540,7 @@ def render_event(ev: dict, verbose: bool) -> None:
             elif p.get("approved") and p.get("obs"):
                 st.markdown(f"Approved `{p.get('tool')}` · {step_summary(p['obs'])}")
                 if verbose:
+                    st.caption("Output")
                     show_output(str(p["obs"].get("result") or p["obs"].get("error")))
             else:
                 st.markdown(f"{'Approved' if p.get('approved') else 'Rejected'} `{p.get('tool')}`"
@@ -515,6 +571,23 @@ def render_event(ev: dict, verbose: bool) -> None:
                 st.json(p, expanded=False)
 
 
+@fragment
+def folded_steps(steps: list[dict], verbose: bool, key: str) -> None:
+    """A finished instruction's steps, built only while its section is open: in a long conversation they are most
+    of the page. Opening or closing it redraws this section alone."""
+    n_tools = sum(e["kind"] in ("tool", "user") and bool(e["payload"].get("tool")) for e in steps)
+    box, is_open = lazy_expander(f"How I got here · {len(steps)} steps · {n_tools} tool calls", key=key)
+    if not is_open:
+        return
+    with box:
+        GROUPED["on"] = True
+        try:
+            for ev in steps:
+                render_event(ev, verbose)
+        finally:
+            GROUPED["on"] = False
+
+
 def render_conversation(state: dict, verbose: bool) -> None:
     """Each instruction as: the request, its steps, the answer. A finished instruction folds its steps into one
     "How I got here" section, so requests and answers stand out; the current one shows its steps as they happen."""
@@ -530,14 +603,7 @@ def render_conversation(state: dict, verbose: bool) -> None:
         render_event(request, verbose)
         live = i == len(segments) - 1 and state["status"] not in DONE
         if steps and not live:
-            n_tools = sum(e["kind"] in ("tool", "user") and bool(e["payload"].get("tool")) for e in steps)
-            with st.expander(f"How I got here · {len(steps)} steps · {n_tools} tool calls"):
-                GROUPED["on"] = True
-                try:
-                    for ev in steps:
-                        render_event(ev, verbose)
-                finally:
-                    GROUPED["on"] = False
+            folded_steps(steps, verbose, key=f"how_{state['run_id']}_{i}")
         else:
             for ev in steps:
                 render_event(ev, verbose)
@@ -576,120 +642,143 @@ def start_job(label: str, fn, note: str = "") -> None:
     st.rerun()
 
 
-def wait_for_job() -> None:
-    """While a background step runs, show what it is and the elapsed time (updated every half second)."""
+POLL = getattr(st, "fragment", None) is not None      # the progress box refreshes itself (no blocking loop)
+
+
+def show_progress() -> None:
+    """While a background step runs, show what it is and the elapsed time. With fragments the box redraws itself
+    every second and nothing else on the page waits for it: opening a section during a 15-minute query works,
+    and the page reruns once when the step ends. Without fragments it waits here, as before."""
     job = ss.get("io_job")
     if not job:
         return
     box = st.empty()
-    while job["thread"].is_alive():
+    while True:
+        job["thread"].join(0.5)
+        if not job["thread"].is_alive():
+            break
         secs = int(time.monotonic() - job["t0"])
         box.info(f"⏳ **{job['label']}** · {secs // 60}:{secs % 60:02d} elapsed"
                  + (f"  \n{job['note']}" if job["note"] else ""))
-        job["thread"].join(0.5)
+        if POLL:
+            return                                     # the fragment's timer draws the next update
     box.empty()
     ss.io_job = None
     if job["error"]:
-        st.error(f"{job['label']} failed: {job['error']}")
-    else:
-        st.rerun()
+        ss.job_error = f"{job['label']} failed: {job['error']}"
+    st.rerun()
 
 
-wait_for_job()
-if s and ss.get("io_job"):
-    pass                                           # still running (shown above)
-elif s and s["status"] == "awaiting_approval":
-    p = s["pending"]
-    st.warning("Run this analysis code?" if p["tool"] == "run_python" else f"Approve `{p['tool']}`?")
-    c1, c2 = st.columns(2)
-    if c1.button("Approve", key="approve", type="primary"):
-        label, note = JOB_NOTES.get(p["tool"], (f"Running {p['tool']}", ""))
-        start_job(label, lambda: resolve_pending(s, approved=True), note)
-    pending_id = f"{s['run_id']}-{len(s['events'])}"     # a new request never inherits an open reject form
-    if c2.button("Reject", key="reject"):
-        ss.rejecting = pending_id
-        st.rerun()
-    if ss.get("rejecting") == pending_id:
-        with st.form("reject_form"):
-            reason = st.text_area("Why reject? The agent will follow your reason.", key="reject_reason",
-                                  placeholder="e.g. Only the latest date is needed, not the whole year.")
-            sent = st.form_submit_button("Send rejection", type="primary")
-        if st.button("Cancel", key="cancel_reject"):
-            ss.rejecting = None
+if POLL:
+    show_progress = st.fragment(run_every=1)(show_progress)
+
+
+def set_rejecting(pending_id: str | None) -> None:
+    """Button callback: open (or close) the reject form for this request, redrawing only the action area."""
+    ss.rejecting = pending_id
+
+
+@fragment
+def actions(s: dict, model, backend: str) -> None:
+    """What the user can do now: approve or reject, answer, pick suggested tools, or step on. A fragment: opening
+    the reject form, cancelling it or ticking a toolkit redraws only this box; anything that changes the
+    conversation (approve, send, answer, a step) reruns the whole page once (st.rerun), as it must."""
+    if ss.get("io_job"):
+        return                                         # still running (show_progress)
+    if ss.get("job_error"):
+        st.error(ss.pop("job_error"))
+    if s["status"] == "awaiting_approval":
+        p = s["pending"]
+        st.warning("Run this analysis code?" if p["tool"] == "run_python" else f"Approve `{p['tool']}`?")
+        c1, c2 = st.columns(2)
+        if c1.button("Approve", key="approve", type="primary"):
+            label, note = JOB_NOTES.get(p["tool"], (f"Running {p['tool']}", ""))
+            start_job(label, lambda: resolve_pending(s, approved=True), note)
+        pending_id = f"{s['run_id']}-{len(s['events'])}"     # a new request never inherits an open reject form
+        c2.button("Reject", key="reject", on_click=set_rejecting, args=(pending_id,))
+        if ss.get("rejecting") == pending_id:
+            with st.form("reject_form"):
+                reason = st.text_area("Why reject? The agent will follow your reason.", key="reject_reason",
+                                      placeholder="e.g. Only the latest date is needed, not the whole year.")
+                sent = st.form_submit_button("Send rejection", type="primary")
+            st.button("Cancel", key="cancel_reject", on_click=set_rejecting, args=(None,))
+            if sent:
+                if reason.strip():
+                    ss.rejecting = None
+                    resolve_pending(s, approved=False, reason=reason)
+                    st.rerun()
+                st.error("Please give a reason, so the agent knows what to change.")
+
+    elif s["status"] == "awaiting_choice":
+        p = s["pending"]
+        st.info("The agent suggests more tools for this task (reason above). You decide.")
+        picked = [t for t in p["toolkits"]
+                  if st.checkbox(f"Enable toolkit `{t}` — {extensions.TOOLKITS[t]['description']}", value=True,
+                                 key=f"suggest_{t}")]
+        use_skill = bool(p.get("skill")) and st.checkbox(
+            f"Use skill `{p['skill']}` — {get_skill(p['skill']).description}", value=True, key="suggest_skill")
+        c1, c2 = st.columns(2)
+        if c1.button("Use selected", key="use_suggestion", type="primary"):
+            resolve_pending(s, choice={"toolkits": picked, "skill": p["skill"] if use_skill else None})
+            add_to_session(s["toolkits"])         # accepted toolkits stay on for this session
             st.rerun()
-        if sent:
-            if reason.strip():
-                ss.rejecting = None
-                resolve_pending(s, approved=False, reason=reason)
+        if c2.button("Continue without", key="decline_suggestion"):
+            resolve_pending(s, choice={})
+            st.rerun()
+
+    elif s["status"] == "awaiting_user":
+        # the question itself is already in the chat above: only the ways to answer it here
+        if st.button("Yes, go ahead", key="confirm_proposal", type="primary",
+                     help="Confirms what the agent proposed in its question."):
+            resolve_pending(s, answer="Yes, confirmed: go ahead with your proposal.")
+            st.rerun()
+        with st.form("answer_form", clear_on_submit=True):
+            answer = st.text_input("Or type your answer / correction", key="answer")
+            submitted = st.form_submit_button("Send answer")
+        if submitted:
+            if not answer.strip():
+                st.error("Enter an answer first.")
+            else:
+                resolve_pending(s, answer=answer)
                 st.rerun()
-            st.error("Please give a reason, so the agent knows what to change.")
 
-elif s and s["status"] == "awaiting_choice":
-    p = s["pending"]
-    st.info("The agent suggests more tools for this task (reason above). You decide.")
-    picked = [t for t in p["toolkits"]
-              if st.checkbox(f"Enable toolkit `{t}` — {extensions.TOOLKITS[t]['description']}", value=True,
-                             key=f"suggest_{t}")]
-    use_skill = bool(p.get("skill")) and st.checkbox(
-        f"Use skill `{p['skill']}` — {get_skill(p['skill']).description}", value=True, key="suggest_skill")
-    c1, c2 = st.columns(2)
-    if c1.button("Use selected", key="use_suggestion", type="primary"):
-        resolve_pending(s, choice={"toolkits": picked, "skill": p["skill"] if use_skill else None})
-        add_to_session(s["toolkits"])         # accepted toolkits stay on for this session
-        st.rerun()
-    if c2.button("Continue without", key="decline_suggestion"):
-        resolve_pending(s, choice={})
-        st.rerun()
-
-elif s and s["status"] == "awaiting_user":
-    # the question itself is already in the chat above: only the ways to answer it here
-    if st.button("Yes, go ahead", key="confirm_proposal", type="primary",
-                 help="Confirms what the agent proposed in its question."):
-        resolve_pending(s, answer="Yes, confirmed: go ahead with your proposal.")
-        st.rerun()
-    with st.form("answer_form", clear_on_submit=True):
-        answer = st.text_input("Or type your answer / correction", key="answer")
-        submitted = st.form_submit_button("Send answer")
-    if submitted:
-        if not answer.strip():
-            st.error("Enter an answer first.")
+    elif s["status"] in ("planning", "running"):
+        last = s["events"][-1] if s["events"] else None
+        if last and last["kind"] == "model_error":
+            # Auto-run pauses here so a dead backend isn't called in a loop.
+            hint = " Is Ollama running? Start it with `ollama serve`." if backend == "ollama" else ""
+            st.error(f"Model call failed: {last['payload']['error']}.{hint}")
+            go = st.button("Retry", key="retry", type="primary")
         else:
-            resolve_pending(s, answer=answer)
-            st.rerun()
+            go = ss.autorun or st.button("Next step", key="next")
+        if go:
+            start_job(f"Step {s['step_count'] - s.get('task_start', 0) + 1}: the agent is working",
+                      lambda: run_one_step(s, model))
 
-elif s and s["status"] in ("planning", "running"):
-    last = s["events"][-1] if s["events"] else None
-    if last and last["kind"] == "model_error":
-        # Auto-run pauses here so a dead backend isn't called in a loop.
-        hint = " Is Ollama running? Start it with `ollama serve`." if backend == "ollama" else ""
-        st.error(f"Model call failed: {last['payload']['error']}.{hint}")
-        go = st.button("Retry", key="retry", type="primary")
-    else:
-        go = ss.autorun or st.button("Next step", key="next")
-    if go:
-        start_job(f"Step {s['step_count'] - s.get('task_start', 0) + 1}: the agent is working",
-                  lambda: run_one_step(s, model))
+    elif s["status"] == "finished":
+        for w in s.get("warnings", []):
+            st.warning(w)
+        files = exports(s)
+        a, c, p_ = st.columns(3)
+        a.download_button("Download answer (.md)", s["final"] or "", file_name="answer.md", key="download")
+        c.download_button("Download conversation (.html)", files["html"], file_name=f"conversation_{s['run_id']}.html",
+                          mime="text/html", key="download_html",
+                          help="The whole conversation: requests, steps, answers, tables and sources, in one page.")
+        if files["script"] is None:
+            p_.caption("No analysis script: this conversation read no data and ran no analysis code.")
+        elif isinstance(files["script"], Exception):
+            p_.error(f"Could not build the analysis script: {files['script']}")
+        else:
+            p_.download_button("Download analysis script (.py)", files["script"], file_name=f"analysis_{s['run_id']}.py",
+                               mime="text/x-python", key="download_script",
+                               help="Replays the analysis: the data reads, queries and approved code in order, then "
+                                    "rebuilds each answer and checks each step against what the agent saw.")
 
-elif s and s["status"] == "finished":
-    for w in s.get("warnings", []):
-        st.warning(w)
-    files = exports(s)
-    a, c, p_ = st.columns(3)
-    a.download_button("Download answer (.md)", s["final"] or "", file_name="answer.md", key="download")
-    c.download_button("Download conversation (.html)", files["html"], file_name=f"conversation_{s['run_id']}.html",
-                      mime="text/html", key="download_html",
-                      help="The whole conversation: requests, steps, answers, tables and sources, in one page.")
-    if files["script"] is None:
-        p_.caption("No analysis script: this conversation read no data and ran no analysis code.")
-    elif isinstance(files["script"], Exception):
-        p_.error(f"Could not build the analysis script: {files['script']}")
-    else:
-        p_.download_button("Download analysis script (.py)", files["script"], file_name=f"analysis_{s['run_id']}.py",
-                           mime="text/x-python", key="download_script",
-                           help="Replays the analysis: the data reads, queries and approved code in order, then "
-                                "rebuilds each answer and checks each step against what the agent saw.")
 
+if s and ss.get("io_job"):
+    show_progress()
 if s:
+    actions(s, model, backend)
     render_model_calls(s)
 
 # ---------------------------------------------------------------- message box (+ attachments)

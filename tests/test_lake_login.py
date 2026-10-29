@@ -1,6 +1,7 @@
 """Data lake sign-in: the user's ID and password reach the lake and nothing else (memory only)."""
 
 from agent import config, connectors, credentials
+from agent.connectors import odbc
 from agent.backends.fake import FakeModel
 from agent.datalake import LakeError, get_lake, needs_login
 from agent.loop import resolve_pending, run_one_step
@@ -77,6 +78,52 @@ class OdbcTemplate(TempDirs):
         conn = Connector(name="lake", kind="odbc", folder=config.EXTENSIONS_DIR)
         with self.assertRaisesRegex(RuntimeError, "no CONNECTION_STRING"):
             odbc.connection_string(conn, None)
+
+    def test_a_connector_without_a_connection_is_reported_at_load_with_the_reason(self):
+        from pathlib import Path
+        from unittest import mock
+        root = Path(self._tmp) / "conns"
+        cases = {"lower": 'KIND = "odbc"\nconnection_string = "DRIVER={D};SERVER=s"\n',
+                 "near": 'KIND = "odbc"\nCONN_STR = "DRIVER={D};SERVER=s"\n',
+                 "dsn": 'KIND = "odbc"\nDSN = "LakeDSN"\n', "nokind": 'DESCRIPTION = "Synthetic."\n'}
+        for name, body in cases.items():
+            (root / name).mkdir(parents=True)
+            (root / name / "connector.py").write_text(body)
+        (root / "old").mkdir()
+        (root / "old" / "connector.md").write_text("---\nkind: odbc\n---\n")
+        with mock.patch.dict("os.environ", {"LAKE_ODBC": "DRIVER={D};SERVER=s"}):
+            errors = {}
+            for name in [*cases, "old"]:
+                try:
+                    connectors._load(root / name)
+                except (ValueError, FileNotFoundError) as e:
+                    errors[name] = str(e)
+        self.assertNotIn("dsn", errors)                                    # DSN = "<name>" is enough
+        self.assertIn("Rename connection_string to CONNECTION_STRING", errors["lower"])
+        self.assertIn("Rename CONN_STR", errors["near"])
+        self.assertIn("LAKE_ODBC is set in the environment but not read", errors["near"])
+        self.assertIn("no KIND", errors["nokind"])
+        self.assertIn("connector.md is no longer read", errors["old"])
+
+    def test_pyodbc_gets_the_connection_string_and_nothing_else(self):
+        """No readonly, autocommit or timeout attributes: some drivers reject them."""
+        import sys
+        import types
+        from unittest import mock
+        from agent.connectors import Connector
+        calls = []
+        fake = types.SimpleNamespace(connect=lambda *a, **k: calls.append((a, k)) or object(), Error=Exception,
+                                     drivers=lambda: [])
+        conn = Connector(name="lake", kind="odbc", folder=config.EXTENSIONS_DIR,
+                         settings={"connection_string": "DRIVER={D};SERVER=s"})
+        with mock.patch.dict(sys.modules, {"pyodbc": fake}):
+            odbc.connect(conn, credentials.Login("analyst", "p"))
+        self.assertEqual(calls, [(("DRIVER={D};SERVER=s;UID={analyst};PWD={p}",), {})])
+
+    def test_a_dsn_alone_makes_the_connection_string(self):
+        from agent.connectors import Connector
+        conn = Connector(name="lake", kind="odbc", folder=config.EXTENSIONS_DIR, settings={"dsn": "LakeDSN"})
+        self.assertEqual(odbc.connection_string(conn, credentials.Login("a", "p")), "DSN=LakeDSN;UID={a};PWD={p}")
 
     def test_a_missing_dsn_names_the_driver_and_what_is_installed(self):
         from agent.connectors import Connector, odbc

@@ -343,7 +343,10 @@ guidance and the planner prompt say so, after a run offered a dataset skill for 
 - `CONNECTORS` picks the enabled connectors (default all). A connection (connection string, URL) is set only in
   its `connector.py`, never in an environment variable, so one process connects to several sources at once (tests set
   a mock server's port in code, `connectors.OVERRIDES`). A connector that fails to load is reported in
-  `connectors.ERRORS`. An ODBC "data source name not found" (IM002) is explained: the driver named and the drivers
+  `connectors.ERRORS`. `KIND` is required; an `odbc` connector without
+  `CONNECTION_STRING` (or `DSN`) is not loaded, with the reason (`odbc.missing_connection`: what the file sets, a
+  near-miss name, an old environment variable no longer read). An `odbc` connection is opened with the connection string only (`pyodbc.connect(text)`: no readonly, autocommit or
+  timeout attributes, which some drivers reject). An ODBC "data source name not found" (IM002) is explained: the driver named and the drivers
   installed (`odbc.driver_help`).
 - **One connector per query:** `datalake.connector_for(sql)` finds the connector of the datasets a query reads; a
   query that mixes connectors is refused with advice to query each and combine the extracts with `run_python`.
@@ -712,8 +715,18 @@ Streamlit re-runs the whole script on every interaction. Therefore:
 - Approvals, questions and suggestions are buttons and inputs that call `resolve_pending`, then rerun. A rejection
   needs a reason.
 - A step that can take long (an approved lake query can take minutes, an agent step, analysis code) runs in a
-  background thread (`start_job`); every rerun meanwhile shows what is running and the elapsed time and offers no
+  background thread (`start_job`); meanwhile a progress box shows what is running and the elapsed time and offers no
   actions, so the same query is never started twice.
+- **Partial reruns**, so a click redraws only its own part of the page where it can (Streamlit fragments):
+  - the action area (`actions`): opening or cancelling the reject form or ticking a suggested toolkit redraws only
+    it; anything that changes the conversation (approve, send, answer, a step) reruns the page once;
+  - the progress box (`show_progress`) redraws itself every second without blocking, so the page stays usable during
+    a 15-minute query and reruns once when the step ends;
+  - lazy sections, built only while open, each redrawing alone: a finished instruction's "How I got here"
+    (most of a long conversation), Model calls, Datasets (asks the sources only when open) and Prompt settings;
+  - the sidebar's conversation picker and each data sign-in; the step limit and prompt texts are sent with the next
+    action instead of on typing (`on_change="ignore"`).
+  Each feature is detected at start, so an older Streamlit falls back to full reruns with the same behaviour.
 - For long runs or many users, move execution to a background worker and have the UI
   poll `log.jsonl` (see "Scaling" below).
 

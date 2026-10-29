@@ -6,6 +6,7 @@ and its full stored output (runs/<id>/outputs/<ref>.txt), so the user can check 
 """
 from __future__ import annotations
 
+import inspect
 import json
 import re
 
@@ -15,10 +16,24 @@ from agent import config
 from agent.memory import run_dir
 from agent.outputs import parse_output, python_table  # noqa: F401  (re-exported for callers)
 from agent.sqlfmt import format_sql
-from agent.ui.results_page import number_columns
+from agent.ui.results_page import STRETCH, number_columns
 
 CITATION = re.compile(r"\[(ref|doc):\s*([^\]]+)\]")
 MAX_SHOWN = 6000
+SCROLL_LINES = 12          # a longer input or output scrolls inside a box this many lines high
+_SCROLL_PX = 22 * SCROLL_LINES
+_CODE_HEIGHT = "height" in inspect.signature(st.code).parameters
+
+
+def scroll_code(text: str, language: str | None = None) -> None:
+    """Code or text in a box that scrolls once it is longer than SCROLL_LINES, so a long query, input or result
+    does not push the conversation down; a short one keeps its own height."""
+    long = text.count("\n") + 1 > SCROLL_LINES
+    if _CODE_HEIGHT:
+        st.code(text, language=language, height=_SCROLL_PX if long else "content")
+    else:                                     # older Streamlit: a fixed-height container scrolls instead
+        with st.container(height=_SCROLL_PX) if long else st.container():
+            st.code(text, language=language)
 
 
 def number_sources(text: str, anchor: str) -> tuple[str, list[tuple[str, str]]]:
@@ -74,12 +89,12 @@ def show_output(output: str, key: str = "") -> None:
     caption, table, rest = parse_output(output)
     if table is not None:
         st.caption(caption)
-        st.dataframe(table.head(config.UI_MAX_GRID_ROWS), hide_index=True, use_container_width=True,
+        st.dataframe(table.head(config.UI_MAX_GRID_ROWS), hide_index=True, **STRETCH,
                      column_config=number_columns(table))
         if rest:
             st.caption(rest)
     else:
-        st.text(output[:MAX_SHOWN] + ("\n… (truncated)" if len(output) > MAX_SHOWN else ""))
+        scroll_code(output[:MAX_SHOWN] + ("\n… (truncated)" if len(output) > MAX_SHOWN else ""))
 
 
 def render_answer(state: dict, text: str, key: str, md=lambda t: t) -> None:

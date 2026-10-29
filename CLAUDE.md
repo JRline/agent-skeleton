@@ -202,7 +202,7 @@ from the connector's optional `sample.py` (git-ignored `data/`, never inside `sa
 ## Known limitations / gotchas
 - Tool timeouts use a thread: a timed-out tool keeps running in the background. Tools get `TOOL_TIMEOUT_S` (30 s);
   `sql_query` gets `SQL_TIMEOUT_S` (900 s, lake queries can run 15 minutes). A query cut off or stopped by the user
-  keeps running on the lake server until it ends: set the lake driver's own query timeout to match.
+  keeps running on the lake server until it ends: set the lake driver's own query timeout to match (in `CONNECTION_STRING`: the agent passes pyodbc nothing else).
 - `pysandbox` has no OS-level network or memory isolation (imports and readers are restricted instead, and a
   CPU/time limit applies). Review with security before production.
 - `recall` and `search_docs` are keyword-only (no embeddings).
@@ -213,5 +213,5 @@ from the connector's optional `sample.py` (git-ignored `data/`, never inside `sa
 - Token counts are estimates (chars / 4).
 - `DemoFakeModel` picks its next step by counting `OBSERVATION:` lines, so it only suits the short demo.
 - A conversation gets the files attached in the message box or named in the message (matched by file name).
-- `st.dataframe(use_container_width=True)` may warn on newer Streamlit; switch to the new width argument if so.
+- Result grids use `width="stretch"` where Streamlit has it (`results_page.STRETCH`), else `use_container_width`.
 - `ollama_api.py` defaults to `qwen3:4b`; the owner should choose the model(s).

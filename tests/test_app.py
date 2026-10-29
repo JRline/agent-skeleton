@@ -17,6 +17,17 @@ except ImportError:  # pragma: no cover
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
 
 
+def open_section(at, key: str):
+    """Open a lazy section (an expander built only while open), as a click on it would."""
+    at.session_state[key] = True
+    return at.run()
+
+
+def steps_key(at, i: int = 0) -> str:
+    """The key of instruction i's folded "How I got here" section."""
+    return f"how_{at.session_state['state']['run_id']}_{i}"
+
+
 @unittest.skipIf(AppTest is None, "streamlit not installed")
 class AppSmoke(TempDirs):
     def setUp(self):
@@ -96,6 +107,7 @@ class AppSmoke(TempDirs):
         at.run()
         at.chat_input(key="goal").set_value("Compute the latest capital ratio").run()
         shown = len(at.code)                               # tool inputs and approval only
+        open_section(at, "model_calls_open")
         at.checkbox(key="show_raw").check().run()
         self.assertFalse(at.exception)
         self.assertGreater(len(at.code), shown)            # one block per model call
@@ -169,6 +181,8 @@ class AppSmoke(TempDirs):
         from agent import settings
         at = AppTest.from_file(APP, default_timeout=30)
         at.run()
+        self.assertNotIn("pref_role", [t.key for t in at.text_area])          # not built while closed
+        open_section(at, "prompt_settings_open")
         at.text_area(key="pref_role").set_value("You are a capital analyst.")
         at.button(key="pref_save").click().run()
         self.assertEqual(settings.load()["role"], "You are a capital analyst.")
@@ -184,6 +198,9 @@ class AppSmoke(TempDirs):
         at.run()
         at.chat_input(key="goal").set_value("Compute the latest capital ratio").run()
         at.button(key="approve").click().run()
+        shown = " ".join(e.value for e in list(at.text) + list(at.markdown) + list(at.code))
+        self.assertNotIn("Approved `run_python`", shown)               # folded steps are not built while closed
+        open_section(at, steps_key(at))
         shown = " ".join(e.value for e in list(at.text) + list(at.markdown) + list(at.code))
         self.assertIn("Approved `run_python` · table 3", shown)       # one line per step
         self.assertNotIn('"2026Q1", 12.54', shown)                    # never raw result text
@@ -331,10 +348,6 @@ class AppSmoke(TempDirs):
         self.assertEqual(rejected["payload"]["reason"], "Not needed for this goal.")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 @unittest.skipIf(AppTest is None, "streamlit not installed")
 class LakeSignIn(TempDirs):
     """A lake that needs the user's own login: the sidebar asks for it and keeps it in memory only."""
@@ -365,3 +378,18 @@ class LakeSignIn(TempDirs):
         self.assertTrue(any("usage_limits" in m.value for m in at.markdown))   # the lake's views, as this user
         at.button(key="sign_out_sample_lake").click().run()
         self.assertEqual(at.session_state["lake_logins"], {})
+
+
+@unittest.skipIf(AppTest is None, "streamlit not installed")
+class ScrollBoxes(unittest.TestCase):
+    def test_a_long_input_or_output_scrolls_in_a_fixed_box_and_a_short_one_does_not(self):
+        from agent.ui import sources
+        with mock.patch.object(sources.st, "code") as code:
+            sources.scroll_code("\n".join(f"line {i}" for i in range(40)), "sql")
+            sources.scroll_code("SELECT 1", "sql")
+        heights = [c.kwargs.get("height") for c in code.call_args_list]
+        self.assertEqual(heights, [sources._SCROLL_PX, "content"])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -100,6 +100,33 @@ class HumanInTheLoop(LoopCase):
         user = [e for e in state["events"] if e["kind"] == "user"][0]["payload"]
         self.assertEqual((user["approved"], user["reason"]), (False, "write it to the shared folder instead"))
 
+    def test_a_query_the_user_rejects_as_wrong_is_corrected_and_asked_again(self):
+        """The user points out an error in the SQL: the agent is told to send the fix, even one that only changes
+        the query's form, and the corrected query reaches the user for approval (it is not refused as a repeat)."""
+        from tests.helpers import STD
+        wrong = (f"SELECT SUM(amount) AS rwa FROM usage_limits WHERE {STD} AND scenario = 'USED' "
+                 "AND resource = 'RWA' AND as_of_date = '26/03/2026'")
+        fixed = wrong.replace("'26/03/2026'", "'2026-03-26'")
+        m = model([tool_call("sql_query", sql=wrong, save_as="rwa"), tool_call("sql_query", sql=fixed, save_as="rwa"),
+                   final("RWA [ref: sql_query-2].")], reviewer=[OK] * 3)
+        m.replies["action_review"] = [j(ok=True, explain="Sums RWA.")] * 3
+        state = new_state("RWA on 26 March 2026", toolkits=["datalake"])
+        for _ in range(5):
+            run_one_step(state, m)
+            if state["status"] == "awaiting_approval":
+                break
+        self.assertIn("'26/03/2026'", state["pending"]["input"]["sql"])
+        resolve_pending(state, approved=False, reason="The date is in the wrong format: use '2026-03-26'.")
+        for _ in range(5):
+            if state["status"] != "running":
+                break
+            run_one_step(state, m)
+        told = executor_prompts(m)[-1][-1]["content"]
+        self.assertIn("send the corrected request, even if it differs only in form", told)
+        self.assertNotIn("another form", told)
+        self.assertEqual(state["status"], "awaiting_approval")                     # the fix is asked, not refused
+        self.assertIn("'2026-03-26'", state["pending"]["input"]["sql"])
+
     def test_ask_user_pauses_and_resumes(self):
         m = model([tool_call("ask_user", question="Which period?"), final("Using 2026Q3.")])
         state = new_state("goal")

@@ -14,7 +14,8 @@ DESCRIPTION = "One line: what this data source is (e.g. the production data lake
 # True: each user signs in with their own user ID and password (sidebar, or CLI --sign-in); they are held in memory
 # only and added to the connection as UID and PWD. Never put them in CONNECTION_STRING.
 NEEDS_LOGIN = True
-# Driver, server, port and database only: no user ID or password.
+# Driver, server, port and database only: no user ID or password. Upper case, as written here: the agent reads
+# only upper-case constants. A data source already defined on the machine can be named instead: DSN = "<name>".
 CONNECTION_STRING = "DRIVER={Lake ODBC Driver};SERVER=lake.example.internal;PORT=9996;DATABASE=analytics;SSL=1"
 DIALECT = "trino"                 # the server's SQL dialect as sqlglot names it (trino, tsql, oracle, postgres, ...)
 

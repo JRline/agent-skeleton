@@ -359,9 +359,14 @@ def _sources(items: list[dict]) -> dict[str, dict]:
         kind = conn.kind if conn else "odbc"
         out[name] = {"kind": "mock" if kind in ("mock", "sqlite") else "odbc",   # local CSVs are served by the mock server
                      "url": conn.setting("url") if conn and kind in ("mock", "sqlite") else "",
-                     "odbc": conn.setting("connection_string") if conn and kind == "odbc" else "",
+                     "odbc": _odbc_base(conn) if conn and kind == "odbc" else "",
                      "login": bool(conn and conn.needs_login)}
     return out
+
+
+def _odbc_base(conn) -> str:
+    from .connectors.odbc import _base
+    return _base(conn)
 
 
 def _indent(code: str) -> str:
@@ -463,7 +468,7 @@ def run_sql(sql: str, source: str) -> pd.DataFrame:
         if src["login"]:                         # braced values: a ; or = in them cannot break the string
             user, pwd = (v.replace("}", "}}") for v in (_user(), _password(source)))
             dsn += f";UID={{{user}}};PWD={{{pwd}}}"
-        conn = pyodbc.connect(dsn, readonly=True, autocommit=True)
+        conn = pyodbc.connect(dsn)                             # the connection string only, as in the agent
         try:
             cur = conn.cursor()
             cur.execute(sql)

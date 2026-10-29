@@ -39,6 +39,13 @@ ABOUT = """Notes every dataset of this connector shares (calendar, units, how da
 - Settings: `CONNECTORS=a,b` picks the enabled connectors (default all). A connection (connection string, URL)
   is set only in its `connector.py`, never in an environment variable: each connector has its own, so the agent
   connects to several sources at once. Never put a user ID, password or token in a file.
+- `KIND` is required. An `odbc` connector needs `CONNECTION_STRING` (or `DSN = "<name>"` for a data source defined on
+  the machine), upper case. Without one the connector is not loaded and the UI's "Extension not loaded" warning says
+  what the file sets instead and which old environment variable (`LAKE_ODBC`, `LAKE_DSN`) is set but no longer read.
+  A folder with only the old `connector.md` is reported the same way.
+- An `odbc` connector is opened with `pyodbc.connect(<connection string>)` and nothing else (no readonly,
+  autocommit or timeout attributes, which some drivers reject). Reading only is enforced by the SQL guard and the
+  read-only account; put driver options, such as a query timeout, in `CONNECTION_STRING` in the driver's own keywords.
 - "Data source name not found" (ODBC IM002, a missing DSN): the `DRIVER={...}` name in `CONNECTION_STRING` is not
   installed under that exact name. The error lists the installed drivers; copy the name exactly.
 - Optional `sample.py` with `write()` builds synthetic data for local runs (`scripts/setup_local.py` calls it), and

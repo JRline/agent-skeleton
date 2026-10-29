@@ -115,13 +115,23 @@ def _module(path: Path, name: str):
 def _load(folder: Path) -> Connector:
     """A connector from its connector.py: Python, so a connection string is a plain literal (no front-matter parsing
     or quoting rules) and a custom kind's code sits next to its settings."""
+    if not (folder / "connector.py").exists():
+        old = (" connector.md is no longer read: copy _template/connector.py and move its settings there"
+               if (folder / "connector.md").exists() else "")
+        raise FileNotFoundError(f"no connector.py in {folder}.{old}")
     code = _module(folder / "connector.py", f"connector_{folder.name}")
     meta = {k.lower(): v for k, v in vars(code).items() if k.isupper()}
     meta.update(OVERRIDES.get(meta.get("name", folder.name), {}))
     name = meta.get("name") or folder.name
     conn = Connector(name=name, kind="", folder=folder, description=meta.get("description", ""),
                      settings=meta, about=" ".join(str(meta.get("about", "")).split()), code=code)
-    conn.kind = conn.setting("kind", "sqlite")
+    conn.kind = conn.setting("kind")
+    if not conn.kind:
+        raise ValueError('connector.py sets no KIND ("odbc", "mock", "sqlite" or "custom")')
+    if conn.kind == "odbc":
+        from .odbc import missing_connection
+        if missing_connection(conn):
+            raise ValueError(missing_connection(conn))
     conn.needs_login = conn.setting("needs_login", "no").lower() in ("yes", "true", "1")
     for path in sorted((folder / "datasets").glob("*.md")):
         if path.name.startswith("_"):

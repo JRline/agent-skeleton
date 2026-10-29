@@ -5,6 +5,7 @@ the tables of later follow-ups too: use Refresh, or reload the tab.
 """
 from __future__ import annotations
 
+import inspect
 import re
 
 import pandas as pd
@@ -13,6 +14,10 @@ import streamlit as st
 from agent import config
 from agent.memory import load_state
 
+
+# Full-width grids: `width` on newer Streamlit, where use_container_width is deprecated and logs on every table.
+STRETCH = ({"width": "stretch"} if "width" in inspect.signature(st.dataframe).parameters
+           else {"use_container_width": True})
 
 # Numeric columns that are labels, not amounts: a year shown as "2,025" or an ID with separators misleads.
 _NOT_AMOUNT = re.compile(r"date|year|^fy|period|quarter|month|(^|_)id$|code|partition_key|rank", re.I)
@@ -50,12 +55,12 @@ def show_table(path, title: str, key: str) -> None:
     st.caption(title)
     if path.stat().st_size > config.UI_MAX_DOWNLOAD_MB * 1e6:
         df = _head(str(path), _version(path), limit)
-        st.dataframe(df, hide_index=True, use_container_width=True, column_config=number_columns(df))
+        st.dataframe(df, hide_index=True, column_config=number_columns(df), **STRETCH)
         st.caption(f"Showing the first {limit:,} rows. The file ({path.stat().st_size / 1e6:,.0f} MB) is too large "
                    f"to download here; it is saved at `{path.resolve()}`.")
         return
     df, data = _read(str(path), _version(path))
-    st.dataframe(df.head(limit), hide_index=True, use_container_width=True, column_config=number_columns(df))
+    st.dataframe(df.head(limit), hide_index=True, column_config=number_columns(df), **STRETCH)
     if len(df) > limit:
         st.caption(f"Showing the first {limit:,} of {len(df):,} rows; the download has them all.")
     st.download_button("Download CSV", data, file_name=path.name, mime="text/csv", key=key)

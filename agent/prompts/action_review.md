@@ -34,7 +34,9 @@ REVIEW CHECKLIST (instructions for you, not part of the request):
 0. The user's answers (USER ANSWER and USER REJECTED facts) override the plan step: a request that follows the period, scope or
    level the user confirmed is not a mismatch, and never push a request back to a scope the user did not
    confirm. A plan step that earlier results made unnecessary (e.g. explaining breaches when none were found)
-   may be skipped; a request that moves on to the rest of the goal is then fine.
+   may be skipped; a request that moves on to the rest of the goal is then fine. A request that makes the change
+   a USER REJECTED reason asks for is never a needless repeat, even when it differs from the earlier request
+   only in form (a date literal, quoting, a column name, a join or filter written another way).
 1. It serves the current step and the goal, and does not repeat a result already in the facts. A lake query
    whose answer can be computed from data already extracted (e.g. a total that is the sum of an earlier extract,
    since the dataset has leaf rows only) is needless: say so, and say to compute it with run_python instead.

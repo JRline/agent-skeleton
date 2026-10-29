@@ -307,8 +307,11 @@ def resolve_pending(state: dict, approved: bool | None = None, answer: str | Non
         reason = (reason or "").strip()[:1500]
         log(state, "user", kind_detail="reject", tool=pending["tool"], reason=reason or None)
         if reason:
+            # "Do not resend the same request in another form" made the agent refuse a correction the user asked
+            # for (a fixed SQL is the same query in another form): the reason asks for a change, so send it.
             message = (f"User rejected {pending['tool']} because: {reason}\n"
-                       "Follow this reason; do not resend the same request in another form.")
+                       "Follow this reason: make the change it asks for (in the SQL, code or approach) and send the "
+                       "corrected request, even if it differs only in form. Do not resend it unchanged.")
             add_fact(state, f"USER REJECTED {pending['tool']} because: {reason}")
         else:
             message = f"User rejected {pending['tool']}. Choose another approach."
