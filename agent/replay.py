@@ -123,7 +123,7 @@ def collect_steps(state: dict) -> list[dict]:
             if tool == "read_file" and obs.get("ok") and _user_file(inp.get("path", "")):
                 items.append({"kind": "read_file", "ref": obs["ref"], "input": inp, "explain": explain})
                 continue
-            if tool not in ("sql_query", "run_python"):
+            if tool not in ("sql_query", "export_query", "run_python"):
                 continue
             if obs.get("ok"):
                 items.append({"kind": tool, "ref": obs["ref"], "input": inp, "explain": explain})
@@ -144,7 +144,7 @@ def _user_file(path: str) -> bool:
 
 def has_steps(state: dict) -> bool:
     """Whether the conversation read data or ran analysis, i.e. whether a replay script has anything to replay."""
-    return any(it["kind"] in ("read_file", "sql_query", "run_python") for it in collect_steps(state))
+    return any(it["kind"] in ("read_file", "sql_query", "export_query", "run_python") for it in collect_steps(state))
 
 
 def agent_result(state: dict, ref: str):
@@ -173,7 +173,7 @@ def _truncated(state: dict, ref: str) -> int | None:
 def _saved_path(state: dict, item: dict) -> str | None:
     """Where the step stored its table, so later steps that read it by path find it in the replay too."""
     text = (run_dir(state) / "outputs" / f"{item['ref']}.txt").read_text()
-    if item["kind"] == "sql_query":
+    if item["kind"] in ("sql_query", "export_query"):
         m = re.search(r"saved as (\S+?\.csv)", text.partition("\n")[0])
         return m.group(1) if m else None
     return json.loads(text).get("saved_as")
@@ -255,6 +255,12 @@ def build_script(state: dict) -> str:
     items = collect_steps(state)
     results, expected, saved, truncated = {}, {}, {}, {}
     for it in items:
+        if it["kind"] == "export_query":            # the agent saw only a preview: the check uses the file itself
+            saved[it["ref"]] = _saved_path(state, it)
+            file = config.SANDBOX_DIR / (saved[it["ref"]] or "-")
+            if file.is_file():
+                results[it["ref"]] = pd.read_csv(file)
+                expected[it["ref"]] = fingerprint(results[it["ref"]])
         if it["kind"] in ("sql_query", "run_python"):
             results[it["ref"]] = agent_result(state, it["ref"])
             expected[it["ref"]] = fingerprint(results[it["ref"]])
@@ -285,6 +291,10 @@ def build_script(state: dict) -> str:
             step_no += 1
             cells.append(_sql_cell(step_no, it, saved[it["ref"]], truncated[it["ref"]],
                                    _name(saved[it["ref"]] or it["input"].get("save_as", "extract"), names)))
+        elif it["kind"] == "export_query":
+            step_no += 1
+            cells.append(_export_cell(step_no, it, saved[it["ref"]],
+                                      _name(saved[it["ref"]] or it["input"].get("name", "export"), names)))
         elif it["kind"] == "run_python":
             step_no += 1
             cells.append(_python_cell(step_no, it, saved[it["ref"]],
@@ -368,8 +378,7 @@ def run_sql(sql: str) -> pd.DataFrame:
     """One read-only SELECT on a data source."""
     if LAKE == "odbc":
         import pyodbc                                          # the lake's ODBC driver must be installed
-        from getpass import getpass
-        conn = pyodbc.connect(f"{{os.environ['LAKE_ODBC']}};UID={{os.environ['ANALYSIS_USER']}};PWD={{getpass()}}",
+        conn = pyodbc.connect(f"{{os.environ['LAKE_ODBC']}};UID={{os.environ['ANALYSIS_USER']}};PWD={{_password()}}",
                               readonly=True, autocommit=True)
         try:
             cur = conn.cursor()
@@ -383,9 +392,23 @@ def run_sql(sql: str) -> pd.DataFrame:
                                  headers={{"Content-Type": "application/json"}})
     if os.getenv("MOCK_LAKE_TOKEN"):
         req.add_header("Authorization", f"Bearer {{os.environ['MOCK_LAKE_TOKEN']}}")
+    elif os.getenv("ANALYSIS_USER"):                          # a server that needs your sign-in
+        from base64 import b64encode
+        token = b64encode(f"{{os.environ['ANALYSIS_USER']}}:{{_password()}}".encode()).decode()
+        req.add_header("Authorization", f"Basic {{token}}")
     with urllib.request.urlopen(req, timeout=int(os.getenv("SQL_TIMEOUT_S", "900"))) as resp:
         out = json.loads(resp.read())
+    if out.get("truncated"):
+        raise RuntimeError(f"The server returned only its first {{len(out['rows']):,}} rows: the result is incomplete.")
     return pd.DataFrame(out["rows"], columns=out["columns"])
+
+
+def _password(cache={{}}):
+    """Asked once per run of the script, never stored."""
+    from getpass import getpass
+    if "pwd" not in cache:
+        cache["pwd"] = getpass(f"Password for {{os.environ['ANALYSIS_USER']}}: ")
+    return cache["pwd"]
 
 
 # Analysis steps read files by the paths they used in the agent ("inputs/...", "work/<run>/..."), so they run
@@ -441,6 +464,16 @@ def _sql_cell(n: int, it: dict, path: str | None, truncated: int | None, var: st
             + f"SQL = {_literal(format_sql(sql))}\n"
             f"{var} = run_sql(SQL){cap}\n"
             f"keep({path!r}, {var})            # later steps read it from this path\n"
+            f'R["{ref}"] = {var}\n'
+            f"{var}")
+
+
+def _export_cell(n: int, it: dict, path: str | None, var: str = "export") -> str:
+    ref, sql = it["ref"], it["input"].get("sql", "")
+    return (f"# %% Step {n} · data export to a file for the user ({ref})\n" + _comment(it.get("explain"))
+            + f"SQL = {_literal(format_sql(sql))}\n"
+            f"{var} = run_sql(SQL)\n"
+            f"keep({path!r}, {var})            # the exported file, where the agent wrote it\n"
             f'R["{ref}"] = {var}\n'
             f"{var}")
 

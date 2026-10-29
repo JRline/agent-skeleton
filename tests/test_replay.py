@@ -143,3 +143,27 @@ class FileOnlyConversation(TempDirs):
         self.assertIn("sample_capital = read_table('inputs/sample_capital.csv')", text)
         self.assertTrue(replay.has_steps(state))
         self.assertNotIn("Nothing to replay", text)
+
+
+class ExportReplay(TempDirs):
+    """An export is a replayable step: the script re-runs its SQL and checks the rows against the file."""
+    def test_export_replays_against_a_signed_in_server(self):
+        sql = f"SELECT location, amount FROM usage_limits WHERE scenario = 'USED' AND resource = 'RWA' AND {STD}"
+        m = FakeModel({"planner": [PLAN], "reviewer": [OK], "summariser": ["- s"] * 5,
+                       "executor": [j(thought="t", tool="export_query", input={"sql": sql, "name": "rows.csv"}),
+                                    j(thought="t", final="The export is ready [ref: export_query-1].")]})
+        state = run("Export RWA rows", m, approve=lambda e: True, toolkits=["datalake"])
+        text = replay.build_script(state)
+        self.assertIn("data export to a file for the user (export_query-1)", text)
+        from agent import connectors
+        srv = server.serve(0, connectors.enabled()["sample_lake"].path("data"), quiet=True,
+                           users={"analyst": "test-pass"})
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        env = {**os.environ, "ANALYSIS_LAKE": "mock", "MOCK_LAKE_URL": f"http://127.0.0.1:{srv.server_address[1]}",
+               "ANALYSIS_USER": "analyst", "ANALYSIS_INPUTS": str(config.inputs_dir())}
+        out = subprocess.run([sys.executable, str(replay.export(state))], input="test-pass\n", capture_output=True,
+                             text=True, env=env, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertRegex(out.stdout, r"export_query-1\s+MATCH")

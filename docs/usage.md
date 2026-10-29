@@ -114,10 +114,11 @@ How a session works, the tools and skills, the data lake and attachments, and th
 - **Analysis script**: one file that replays the whole conversation, built from what actually ran (not written by
   the model). It has `# %%` cells, so `python <file>` runs it end to end and VS Code, Spyder or Jupyter open it
   as cells. The analysis comes first, as plain code; the support code for the checks comes after it:
-  - **Setup**: `run_sql` for the internal lake server (`ANALYSIS_LAKE=odbc`, DSN in `LAKE_DSN`) or the mock
-    lake server (`ANALYSIS_LAKE=mock`); input files from `ANALYSIS_INPUTS`.
-  - **Steps**: every read of your files, every successful `sql_query` and every approved `run_python` code,
-    unchanged and in order, each with the reviewer's plain explanation as a comment and its result in a named
+  - **Setup**: `run_sql` for the internal lake server (`ANALYSIS_LAKE=odbc`, connection string in `LAKE_ODBC`,
+    your user ID in `ANALYSIS_USER`; the password is asked once) or the mock lake server (`ANALYSIS_LAKE=mock`);
+    input files from `ANALYSIS_INPUTS`.
+  - **Steps**: every read of your files, every successful `sql_query` and `export_query` and every approved
+    `run_python` code, unchanged and in order, each with the reviewer's plain explanation as a comment and its result in a named
     variable (e.g. `rwa_by_division = run_sql(SQL)`); each instruction and your answers to the agent's questions
     as headings. Failed or rejected attempts are kept as comments.
   - **Answers**: each answer as a template; every number traced to a result cell (by step, row name and column)

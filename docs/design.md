@@ -781,9 +781,13 @@ state as well. This is enough to replay a run, debug failures, and evidence how 
 **Replay script** (`replay.py`; the "analysis script (.py)" download, or `cli.py --export-script RUN_ID`),
 assembled by the harness from what ran, never by the model. Plain Python with `# %%` cells (runs end to end, or
 cell by cell in VS Code / Spyder / Jupyter). The analysis comes first as plain code; support code comes after:
-- Setup: `run_sql` for the production lake over ODBC (`ANALYSIS_LAKE=odbc`, `LAKE_DSN`) or the mock lake server
-  (`ANALYSIS_LAKE=mock`); inputs from `ANALYSIS_INPUTS`; steps run in a scratch folder with their original paths.
-- Every read of the user's files, every successful `sql_query` and every approved `run_python` code unchanged,
+- Setup: `run_sql` for the production lake over ODBC (`ANALYSIS_LAKE=odbc`, connection string without the sign-in
+  in `LAKE_ODBC`, user ID in `ANALYSIS_USER`) or the mock lake server (`ANALYSIS_LAKE=mock`; with `ANALYSIS_USER`
+  it signs in); the password is asked once per run and never stored. A result the server cut at its own row limit
+  is an error, not a short table. Inputs from `ANALYSIS_INPUTS`; steps run in a scratch folder with their
+  original paths.
+- Every read of the user's files, every successful `sql_query` and `export_query` (the export is written where the
+  agent wrote it and checked against that file) and every approved `run_python` code unchanged,
   in order, at top level, each with the reviewer's `explain` as a comment and its result in a variable named after
   its saved table or file (e.g. `rwa_by_division = run_sql(SQL)`); each instruction and the user's answers as
   headings; failed or rejected attempts as comments. `read_range` is included when a step uses it.
