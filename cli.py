@@ -70,6 +70,9 @@ def main() -> int:
     ap.add_argument("--resume", metavar="RUN_ID")
     ap.add_argument("--input", action="append", default=[], help="file to copy into sandbox/inputs")
     ap.add_argument("--skill", help="force a skill (same as /skill_name in the task)")
+    ap.add_argument("--max-steps", type=int, metavar="N",
+                    help=f"tool steps per instruction in this conversation (1-{config.MAX_STEPS_LIMIT}; 0 = automatic: "
+                         f"{config.MAX_STEPS}, or {config.STEPS_PER_PLAN_STEP} per plan step if more)")
     ap.add_argument("--sign-in", action="append", default=[], metavar="CONNECTOR=USER_ID",
                     help="sign in to a connector that needs your own login (repeatable); the password is asked "
                          "without echo")
@@ -114,6 +117,8 @@ def main() -> int:
     unknown = [t for t in extra if t not in extensions.TOOLKITS]
     if unknown:
         ap.error(f"unknown toolkit(s) {unknown}; available: {', '.join(extensions.TOOLKITS)}")
+    if args.max_steps is not None and not 0 <= args.max_steps <= config.MAX_STEPS_LIMIT:
+        ap.error(f"--max-steps must be 0 (automatic) to {config.MAX_STEPS_LIMIT}")
     toolkits = list(dict.fromkeys(extensions.basic_toolkits() + extra + cmd["toolkits"]
                                   + (get_skill(skill).toolkits if skill else [])))
     for err in extensions.ERRORS:
@@ -143,14 +148,15 @@ def main() -> int:
     state = load_state(args.resume) if args.resume else None
     goal = cmd["goal"] or args.goal or ""
     if state and args.goal and state["status"] in DONE:       # a follow-up in an earlier conversation
-        continue_with(state, goal, inputs=inputs, skill=skill, toolkits=toolkits)
+        continue_with(state, goal, inputs=inputs, skill=skill, toolkits=toolkits, max_steps=args.max_steps)
         print(f"Continuing \"{state.get('title') or state['run_id']}\" · tools: {', '.join(toolkits)}")
     elif state:
         print(f"Resuming {state['run_id']} (status={state['status']}) {pending_question(state)}")
     else:
         print(f"Tools: {', '.join(toolkits)}" + (f" · skill {skill}" if skill else ""))
     state = run(goal, model, inputs=inputs, on_event=lambda e: show(e, args.verbose),
-                approve=approve, ask=ask, choose=choose, state=state, skill=skill, toolkits=toolkits)
+                approve=approve, ask=ask, choose=choose, state=state, skill=skill, toolkits=toolkits,
+                max_steps=args.max_steps)
     if state["events"] and state["events"][-1]["kind"] == "model_error":
         print(f"\nFix the backend (for Ollama: `ollama serve`), then continue with:\n"
               f"  python cli.py --backend {args.backend} --resume {state['run_id']}")

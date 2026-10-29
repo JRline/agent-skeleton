@@ -88,10 +88,12 @@ def run_one_step(state: dict, model) -> dict:
         return event(state, status, final=state.get("final"))
     if status in WAITING:
         return event(state, status, **(state["pending"] or {}))   # wait for the human
-    budget = config.step_budget(state.get("plan"))
+    budget = config.step_budget(state.get("plan"), state.get("max_steps"))
     if state["step_count"] - state.get("task_start", 0) >= budget:
-        return abort(state, f"Reached the step limit ({budget} steps for a {len(state.get('plan') or [])}-step "
-                            "plan). Send a follow-up instruction to carry on from the results so far.")
+        how = ("your step limit" if state.get("max_steps")
+               else f"the automatic limit for a {len(state.get('plan') or [])}-step plan")
+        return abort(state, f"Reached the step limit ({budget} steps, {how}). Send a follow-up instruction to carry "
+                            "on from the results so far; a higher step limit can be set for it.")
     graph = _ACTIVE[state["run_id"]] = graph_for(model)
     if state.get("start"):
         payload = _start_payload(state)
@@ -334,9 +336,10 @@ def abort(state: dict, reason: str) -> dict:
 
 
 def continue_with(state: dict, goal: str, inputs: list[str] | None = None, skill: str | None = None,
-                  toolkits: list[str] | None = None) -> dict:
+                  toolkits: list[str] | None = None, max_steps: int | None = None) -> dict:
     """A new instruction in the same conversation (the same LangGraph thread): earlier messages, facts, refs and
-    work tables stay available; the plan and per-instruction counters restart."""
+    work tables stay available; the plan and per-instruction counters restart. `max_steps` changes the
+    conversation's step limit (0 = automatic again); None keeps it."""
     if state["status"] not in DONE:
         raise ValueError(f"Finish or stop the current instruction first (status={state['status']}).")
     state.setdefault("tasks", []).append({"goal": state["goal"], "status": state["status"],
@@ -345,6 +348,8 @@ def continue_with(state: dict, goal: str, inputs: list[str] | None = None, skill
     state["inputs"] = list(dict.fromkeys(state["inputs"] + list(inputs or [])))
     if toolkits is not None:
         state["toolkits"] = list(toolkits)
+    if max_steps is not None:
+        state["max_steps"] = max_steps or None
     state.update(status="planning", plan=[], final=None, pending=None, warnings=[], review_rounds=0,
                  suggested=False, task_start=state["step_count"], start=True)
     log(state, "user", kind_detail="instruction", goal=goal)
@@ -366,11 +371,12 @@ def run(goal: str, model, inputs: list[str] | None = None,
         approve: Callable[[dict], bool | str] = lambda e: False,
         ask: Callable[[dict], str] = lambda e: "No answer available.",
         state: dict | None = None, context: list[str] | None = None, skill: str | None = None,
-        toolkits: list[str] | None = None, choose: Callable[[dict], dict] = lambda e: {}) -> dict:
+        toolkits: list[str] | None = None, choose: Callable[[dict], dict] = lambda e: {},
+        max_steps: int | None = None) -> dict:
     """Run to completion, or stop at a model_error so it can be resumed later. Pass `state` to resume.
     `approve` returns True, or False / a reason to reject. `choose` answers a suggestion, e.g.
     {"toolkits": [...], "skill": ...}; {} declines."""
-    state = state or new_state(goal, inputs, context=context, skill=skill, toolkits=toolkits)
+    state = state or new_state(goal, inputs, context=context, skill=skill, toolkits=toolkits, max_steps=max_steps)
     idle = 0
     while state["status"] not in DONE:
         was_waiting = state["status"] in WAITING

@@ -220,6 +220,21 @@ class Recovery(LoopCase):
         self.assertEqual(long["status"], "finished")
         self.assertEqual(config.step_budget(["a"] * 7), max(config.MAX_STEPS, 7 * config.STEPS_PER_PLAN_STEP))
 
+    def test_the_users_step_limit_is_exact_and_a_follow_up_can_change_it(self):
+        from agent.loop import continue_with
+        state = run("goal", model([READ, LOOKUP, final(), LOOKUP, final()]), max_steps=1)
+        self.assertEqual((state["status"], state["max_steps"]), ("aborted", 1))
+        self.assertIn("your step limit", state["events"][-1]["payload"]["reason"])
+        continue_with(state, "carry on", max_steps=5)                    # raised for the follow-up
+        state = run("carry on", model([LOOKUP, final()]), state=state)
+        self.assertEqual((state["status"], state["max_steps"]), ("finished", 5))
+        continue_with(state, "again")                                    # kept when not given
+        self.assertEqual(state["max_steps"], 5)
+        state = run("again", model([final()]), state=state)
+        continue_with(state, "once more", max_steps=0)                   # 0: automatic again
+        self.assertIsNone(state["max_steps"])
+        self.assertEqual(config.step_budget(["a"], 500), config.MAX_STEPS_LIMIT)
+
     def test_planner_failure_falls_back_to_goal(self):
         m = model([final()], planner=["x"] * 4)
         state = run("my goal", m)

@@ -43,6 +43,19 @@ class AppSmoke(TempDirs):
         self.assertTrue(any("12.66%" in m.value for m in at.markdown))      # the answer is shown
         self.assertFalse(at.chat_input(key="goal").disabled)                # ready for a follow-up
 
+    def test_the_step_limit_set_in_the_sidebar_stops_the_conversation(self):
+        at = AppTest.from_file(APP, default_timeout=30)
+        at.run()
+        at.number_input(key="max_steps").set_value(1).run()
+        at.chat_input(key="goal").set_value("Compute the latest capital ratio").run()
+        self.assertEqual(at.session_state["state"]["status"], "awaiting_approval")   # the one step it may take
+        at.button(key="approve").click().run()
+        self.assertFalse(at.exception)
+        state = at.session_state["state"]
+        self.assertEqual(state["max_steps"], 1)
+        self.assertEqual(state["status"], "aborted")
+        self.assertIn("your step limit", state["events"][-1]["payload"]["reason"])
+
     def test_refs_are_numbered_links_with_a_sources_list(self):
         at = AppTest.from_file(APP, default_timeout=30)
         at.run()

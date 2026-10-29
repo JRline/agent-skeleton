@@ -133,6 +133,7 @@ def open_conversation() -> None:
     """Button callback: load the conversation picked in the sidebar."""
     if ss.resume_id:
         ss.state = load_state(ss.resume_id)
+        ss.max_steps = ss.state.get("max_steps") or 0          # the sidebar shows this conversation's step limit
 
 
 def new_conversation() -> None:
@@ -255,6 +256,7 @@ ss = st.session_state
 ss.setdefault("state", None)
 ss.setdefault("autorun", True)
 ss.setdefault("verbose", False)
+ss.setdefault("max_steps", 0)                    # 0 = automatic step limit
 ss.setdefault("session_toolkits", basic_toolkits())
 if ss.get("pending_toolkits") is not None:      # set by /commands or an accepted suggestion last rerun
     ss.session_toolkits = [t for t in ss.pop("pending_toolkits") if t in extensions.TOOLKITS]
@@ -294,6 +296,11 @@ with st.sidebar:
     elif backend == "claude":
         pick_claude_model()
     ss.autorun = st.toggle("Auto-run steps", value=ss.autorun, key="autorun_toggle")
+    st.number_input("Step limit per instruction", min_value=0, max_value=config.MAX_STEPS_LIMIT, step=1,
+                    key="max_steps",
+                    help=f"Tool steps the agent may take for one instruction; applies from your next message. "
+                         f"0 = automatic: {config.MAX_STEPS}, or {config.STEPS_PER_PLAN_STEP} per plan step for a "
+                         f"longer plan. If it stops at the limit, raise this and send a follow-up to carry on.")
     st.toggle("Verbose", key="verbose", help="On: thoughts, tool inputs and results. Off: only the steps.")
     kits = extensions.TOOLKITS
     st.multiselect("Tools (this session)", list(kits), key="session_toolkits",
@@ -356,7 +363,7 @@ if s:
             rename(s, new_title)
             st.rerun()
     st.caption(f"`{s['run_id']}` · status **{s['status']}** · "
-               f"steps {s['step_count'] - s.get('task_start', 0)}/{config.step_budget(s.get('plan'))} · "
+               f"steps {s['step_count'] - s.get('task_start', 0)}/{config.step_budget(s.get('plan'), s.get('max_steps'))} · "
                f"backend {getattr(model, 'name', backend)} · tools: {', '.join(s.get('toolkits', []))}"
                + (f" · skill `{s['skill']}`" if s.get("skill") else ""))
 
@@ -707,7 +714,9 @@ if submitted:
     mentioned = [f"inputs/{n}" for n in existing if n in message]       # files named in the message
     inputs = sorted(set(attached + mentioned))
     if s:
-        continue_with(s, cmd["goal"] or message, inputs=inputs, skill=skill, toolkits=toolkits)
+        continue_with(s, cmd["goal"] or message, inputs=inputs, skill=skill, toolkits=toolkits,
+                      max_steps=ss.get("max_steps", 0))
     else:
-        ss.state = new_state(cmd["goal"] or message, inputs=inputs, skill=skill, toolkits=toolkits)
+        ss.state = new_state(cmd["goal"] or message, inputs=inputs, skill=skill, toolkits=toolkits,
+                             max_steps=ss.get("max_steps", 0))
     st.rerun()

@@ -149,7 +149,7 @@ Check that `python scripts/smoke_model.py --backend prod` passes after any chang
 |---|---|---|
 | Answers a different period or scope than asked | `USER ANSWER` facts, the skill's steps | The skill must take the period from the request (A) |
 | A breach or total looks wrong | the SQL in the run | Compare at the grain the dataset file defines (per measure leaf, per level); fix the skill |
-| Many steps, then "Reached the step limit" | `log.jsonl`: repeated `review` rejections | A skill step that does not fit the question; make it conditional ("only if ...") |
+| Many steps, then "Reached the step limit" | `log.jsonl`: repeated `review` rejections | A skill step that does not fit the question; make it conditional ("only if ..."). For a one-off long task the user can raise the step limit (sidebar, `--max-steps`) and send a follow-up |
 | Suggests the wrong skill | the planner reply in `log.jsonl` | Sharpen `when_to_use`; add a counter-example (D) |
 | "File not found" for a file the user attached | the tool error lists the exact names | The name has a space or typo; it must be copied exactly (already in the prompts) |
 | The reviewer keeps rejecting a good answer | `review` events | Check the cited outputs hold the numbers; a skill check may be too strict |

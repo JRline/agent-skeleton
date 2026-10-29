@@ -36,7 +36,7 @@ def new_run_id() -> str:
 
 
 def new_state(goal: str, inputs: list[str] | None = None, context: list[str] | None = None,
-              skill: str | None = None, toolkits: list[str] | None = None) -> dict:
+              skill: str | None = None, toolkits: list[str] | None = None, max_steps: int | None = None) -> dict:
     state = {
         "run_id": new_run_id(),
         "created": datetime.now().isoformat(timespec="seconds"),
@@ -54,6 +54,7 @@ def new_state(goal: str, inputs: list[str] | None = None, context: list[str] | N
         "suggested": False,        # the planner may suggest extra toolkits/a skill once per instruction
         "plan": [],
         "step_count": 0,           # tool steps taken (the step limit is per instruction)
+        "max_steps": max_steps or None,   # the user's step limit per instruction; None = automatic (config.step_budget)
         "facts": [],               # tool results with refs, for the reviewers and the finisher
         "pending": None,           # approval, question or suggestion waiting for the user (with its interrupt id)
         "final": None,

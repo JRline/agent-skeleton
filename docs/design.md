@@ -575,7 +575,9 @@ in results.
 ### Stop conditions
 An answer accepted by the checks · the step budget per instruction, counted by the driver:
 `config.step_budget(plan)` = max(`MAX_STEPS` (15), `STEPS_PER_PLAN_STEP` (3) x plan steps), so a 7-step join plan
-gets 21; the stop message says a follow-up instruction carries on from the results so far · repeated action
+gets 21. The user may set the conversation's own limit instead (`state["max_steps"]`, sidebar or CLI
+`--max-steps`; `new_state`/`continue_with(max_steps=...)`, 0 = automatic again), used exactly up to
+`MAX_STEPS_LIMIT` (100). The stop message says a follow-up instruction carries on from the results so far · repeated action
 (finisher, else abort) · user abort.
 
 A backend failure (model unreachable after the adapter's retries, or replies that stay outside the protocol after

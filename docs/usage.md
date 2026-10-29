@@ -16,6 +16,10 @@ How a session works, the tools and skills, the data lake and attachments, and th
   CLI: `--tools <toolkit>,…` or `/name` in the task; one invocation is one session.
 - **Suggestions**: if the goal seems to need a toolkit or skill that is off, the agent pauses and suggests it.
   You tick what to use ("Use selected") or "Continue without". It never enables anything by itself.
+- **Step limit** (sidebar **Step limit per instruction**, CLI `--max-steps N`): the tool steps the agent may take for
+  one instruction, kept with the conversation. 0 (the default) is automatic: 15, or 3 per plan step for a longer
+  plan. A number you set is used exactly (1 to 100). If the agent stops at the limit, raise it and send a follow-up
+  ("carry on"): the results so far are kept.
 - **Verbose** (sidebar, CLI `--verbose`): off shows only the steps (`🔧 sql_query · rows=6; …`), never data read
   in; on also shows thoughts, tool inputs, results and reviewer comments.
 - **Add your own**: connectors and datasets in `extensions/connectors/`, Markdown skills in `extensions/skills/`,

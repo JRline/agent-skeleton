@@ -162,6 +162,7 @@ from the connector's optional `sample.py` (git-ignored `data/`, never inside `sa
   Golden eval on the production stand-in (session_sim, MODEL_MEMORY=session, Haiku): 0.93 (main: 0.74 on the same
   backend). Only `rwa_limit_status_now` fails (step cap 8; it ran 4 queries for a one-query skill). A golden task's
   `max_steps` stays an exact cap in the eval (no plan scaling).
+  Users can set a conversation's step limit (sidebar "Step limit per instruction", CLI `--max-steps`; 0 = automatic).
 
 ## Next tasks, in order
 1. Pin `requirements.txt` to production's exact Python and package versions (ask the owner). The grid number

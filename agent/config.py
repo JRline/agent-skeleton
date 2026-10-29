@@ -101,8 +101,14 @@ EFFORT = {
 }
 
 
-def step_budget(plan: list | None) -> int:
-    """Tool steps an instruction may take: MAX_STEPS, or more for a longer plan."""
+MAX_STEPS_LIMIT = 100           # the highest step limit a user may set for a conversation
+
+
+def step_budget(plan: list | None, max_steps: int | None = None) -> int:
+    """Tool steps an instruction may take: the user's own limit for the conversation when set, else MAX_STEPS, or
+    more for a longer plan."""
+    if max_steps:
+        return max(1, min(int(max_steps), MAX_STEPS_LIMIT))
     return max(MAX_STEPS, STEPS_PER_PLAN_STEP * len(plan or []))
 
 
