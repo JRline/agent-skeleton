@@ -1,6 +1,6 @@
 """A real model behind any OpenAI-compatible chat API (`POST <API_URL>/chat/completions`), standard library only.
 
-Swap it in with LLM_BACKEND=api. It has the same `call(text, effort)` shape as production, so the agent drives it
+Swap it in with LLM_BACKEND=chatgpt. It has the same `call(text, effort)` shape as production, so the agent drives it
 with its JSON reply protocol and needs nothing else from the API (no native tool calling).
 
 Env:
@@ -33,7 +33,7 @@ def _key() -> str:
 def call(text, effort: str = "none") -> str:
     url = os.getenv("API_URL", "").rstrip("/")
     if not url or not model_name(effort):
-        raise RuntimeError("Set API_URL and API_MODEL for LLM_BACKEND=api.")
+        raise RuntimeError("Set API_URL and API_MODEL for LLM_BACKEND=chatgpt.")
     messages = text if isinstance(text, list) else [{"role": "user", "content": text}]
     body = {"model": model_name(effort), "messages": messages, "temperature": 0}
     if os.getenv("API_EFFORT_PARAM"):

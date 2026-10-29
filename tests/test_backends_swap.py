@@ -54,7 +54,7 @@ class Api(TempDirs):
         self.addCleanup(env.stop)
 
     def test_a_real_api_is_one_setting_away(self):
-        state = run("What is the 2026Q3 CET1 capital?", get_model("api"))
+        state = run("What is the 2026Q3 CET1 capital?", get_model("chatgpt"))
         self.assertEqual(state["status"], "finished")
         first = self.requests[0]
         self.assertEqual((first["path"], first["auth"]), ("/v1/chat/completions", "Bearer test-key"))

@@ -9,7 +9,7 @@ read the section relevant to your task before changing code. `docs/setup.md` has
 - Demo run: `python cli.py --yes "Compute the latest capital ratio from inputs/sample_capital.csv"`
 - UI: `streamlit run app.py`
 - Backend check: `python scripts/smoke_model.py --backend ollama` (or `--backend claude`: Haiku via the Claude Code CLI;
-  `--backend api`: a real OpenAI-compatible API, see `agent/backends/openai_api.py`)
+  `--backend chatgpt`: ChatGPT or any OpenAI-compatible API, see `agent/backends/openai_api.py`)
 - Mock lake server (closer to production): `python scripts/mock_lake_server.py`, then run with
   `CONNECTOR_SAMPLE_LAKE_KIND=mock` (per-user sign-in: start the server with `MOCK_LAKE_USERS=analyst:secret` and
   the agent with `CONNECTOR_SAMPLE_LAKE_NEEDS_LOGIN=yes`)
@@ -131,7 +131,7 @@ from the connector's optional `sample.py` (git-ignored `data/`, never inside `sa
   check, repeats and the answer check. `agent/loop.py` drives it one step at a time and keeps `state.json` and its
   events, so the UI, export, replay and eval are unchanged. The step machine is gone (it is on `main`).
 - Also new on the branch: session memory mode, data lake sign-in (memory only; ODBC template with UID/PWD), and two
-  ways to swap in a real model (`LLM_BACKEND=api`, `LLM_BACKEND=langchain`). The CLI asks for a rejection reason.
+  ways to swap in a real model (`LLM_BACKEND=chatgpt`, `LLM_BACKEND=langchain`). The CLI asks for a rejection reason.
 - Verified 2026-10-29: all 283 unit tests pass (Python 3.14 venv with requirements.txt), CLI demo runs, and two
   golden tasks on Haiku (`file_average`, `rwa_latest_total`) score 1.00. The full golden eval has not been run on
   this branch yet.

@@ -141,7 +141,7 @@ Backends (`LLM_BACKEND`, `get_model`):
 | Backend | What | Notes |
 |---|---|---|
 | `prod` | the module named by `PROD_API_MODULE` (`call(text, effort)`; copy `backends/prod_template.py`) | production |
-| `api` | any OpenAI-compatible chat API (`backends/openai_api.py`: `API_URL`, `API_MODEL`, `API_MODEL_MEDIUM`, `API_KEY_FILE`, `API_EFFORT_PARAM`) | standard library only; the swap to a real API is these settings |
+| `chatgpt` | ChatGPT, or any OpenAI-compatible chat API (`backends/openai_api.py`: `API_URL`, `API_MODEL`, `API_MODEL_MEDIUM`, `API_KEY_FILE`, `API_EFFORT_PARAM`) | standard library only; the swap to a real API is these settings |
 | `langchain` | any LangChain chat model, `LC_MODEL="provider:model"` (`init_chat_model`) | used **natively**: its own tool calling and structured output replace the JSON protocol; needs the provider package |
 | `ollama` | a local model on the Mac | development |
 | `claude` | Claude (Haiku by default) via `claude -p` | development; synthetic data only |
@@ -804,7 +804,7 @@ cell by cell in VS Code / Spyder / Jupyter). The analysis comes first as plain c
   the templates parse; mid-run suggestion; file
   tools refuse lake storage.
 - Backend tests without network: Ollama against a local stand-in server, Claude CLI against a fake `claude` script,
-  an OpenAI-compatible stand-in server (`api`), a native LangChain model with tool calling (`langchain`), the
+  an OpenAI-compatible stand-in server (`chatgpt`), a native LangChain model with tool calling (`langchain`), the
   session memory stand-in.
 - Golden tasks (`scripts/eval.py`): representative goals with expected facts. Re-run after prompt, policy, model or
   framework changes.

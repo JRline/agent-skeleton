@@ -83,12 +83,12 @@ streamlit run app.py                        # Backend "claude", Model Haiku 5.5 
 ### Stage 2c: a real model behind an API
 
 When a real API is provided, the swap is a setting; nothing else changes.
-- **OpenAI-compatible chat API** (standard library, the same JSON protocol as production):
+- **ChatGPT, or any OpenAI-compatible chat API** (standard library, the same JSON protocol as production):
   ```bash
-  export LLM_BACKEND=api
+  export LLM_BACKEND=chatgpt
   export API_URL=https://llm.example.internal/v1  API_MODEL=<model>  API_KEY_FILE=~/.config/agent/api_key
   # optional: API_MODEL_MEDIUM=<bigger model>  API_EFFORT_PARAM=reasoning_effort
-  python scripts/smoke_model.py --backend api
+  python scripts/smoke_model.py --backend chatgpt
   ```
   Keep the key in a file outside the repository (`API_KEY_FILE`); `API_KEY` also works.
 - **Any LangChain chat model** (native tool calling, no JSON protocol): install and get approval for its provider
@@ -120,9 +120,9 @@ When a real API is provided, the swap is a setting; nothing else changes.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LLM_BACKEND` | `fake` | `fake`, `ollama`, `claude`, `api`, `langchain` or `prod` |
+| `LLM_BACKEND` | `fake` | `fake`, `ollama`, `claude`, `chatgpt`, `langchain` or `prod` |
 | `PROD_API_MODULE` | `existing_api_module` | module imported for `prod` |
-| `API_URL`, `API_MODEL`, `API_MODEL_MEDIUM`, `API_KEY_FILE` (or `API_KEY`), `API_EFFORT_PARAM`, `API_TIMEOUT_S` | | `api` backend: see `agent/backends/openai_api.py` |
+| `API_URL`, `API_MODEL`, `API_MODEL_MEDIUM`, `API_KEY_FILE` (or `API_KEY`), `API_EFFORT_PARAM`, `API_TIMEOUT_S` | | `chatgpt` backend: see `agent/backends/openai_api.py` |
 | `LC_MODEL` | | `langchain` backend: `provider:model` for `init_chat_model` |
 | `MODEL_MEMORY` | `off` | `session`: the backend keeps one memory per channel, so fixed prompt parts are sent once (docs/design.md §4a); needs a `call(text, effort, channel)` module |
 | `MEMORY_REFRESH_TOKENS` | `20000` | session mode: re-send everything after this much text |

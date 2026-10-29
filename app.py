@@ -286,8 +286,8 @@ with st.sidebar:
     backend = st.selectbox("Backend", backends, index=backends.index(config.BACKEND), key="backend")
     if backend == "ollama":
         pick_ollama_model()
-    elif backend == "api":
-        st.caption(f"OpenAI-compatible API: {os.getenv('API_URL') or 'set API_URL'} · "
+    elif backend == "chatgpt":
+        st.caption(f"ChatGPT (OpenAI-compatible API): {os.getenv('API_URL') or 'set API_URL'} · "
                    f"{os.getenv('API_MODEL') or 'set API_MODEL'}")
     elif backend == "langchain":
         st.caption(f"LangChain model: {config.LC_MODEL or 'set LC_MODEL=provider:model'}")

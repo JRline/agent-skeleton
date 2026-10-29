@@ -5,7 +5,7 @@ A small, auditable Python agent for a text-only model (production: the GPT CLI, 
 The model only produces text. The agent runs on **LangGraph / LangChain** (one `create_agent` graph: the tool loop,
 approvals, pauses, checkpoints); Python adds the domain checks, the tools and a chat model that gives a text-only API
 tool calling. The backend is swappable with one setting, so the same code runs in three places (and on any real
-OpenAI-compatible API with `LLM_BACKEND=api`, or any LangChain chat model with `LLM_BACKEND=langchain`):
+OpenAI-compatible API with `LLM_BACKEND=chatgpt`, or any LangChain chat model with `LLM_BACKEND=langchain`):
 
 | Stage | Backend | Where | Purpose |
 |---|---|---|---|
